@@ -28,3 +28,10 @@ A slack-like chat application.
 - Reactions on messages
 - Different roles/permissions
 - Ability to remind messages
+
+## Naming conventions
+### Issues and commits
+All issues and commits are named in the format `<feature>: <short future tense description>`. All created issues should be assigned a team member, label, and milestone, and should be added to the project.
+
+### Branches
+Branches should be named according to the format `<issue number>: <issue description>`.
