@@ -34,4 +34,4 @@ A slack-like chat application.
 All issues and commits are named in the format `<feature>: <short future tense description>`. All created issues should be assigned a team member, label, and milestone, and should be added to the project.
 
 ### Branches
-Branches should be named according to the format `<issue number>: <issue description>`.
+Branches should be named according to the format `<issue number>-<issue description>`.
