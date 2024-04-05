@@ -3,7 +3,7 @@
 A slack-like chat application.
 
 ## Features
-### MVP (minimum viable product)
+### MVP (minimum viable product) - Färdig 19/4
 - Ability to chat with people privately
 - Ability to chat with people in a group
 - Authentication (i.e. accounts)
