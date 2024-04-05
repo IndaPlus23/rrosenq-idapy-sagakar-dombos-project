@@ -7,7 +7,6 @@ A slack-like chat application.
 - Ability to chat with people privately
 - Ability to chat with people in a group
 - Authentication (i.e. accounts)
-- E2EE (preliminary)
 - Locally stored chat history
 - A usable GUI
 
