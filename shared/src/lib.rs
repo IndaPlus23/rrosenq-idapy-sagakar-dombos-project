@@ -2,7 +2,7 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct Message {
-    pub uuid: String,
+    pub username: String,
     pub auth_token: String,
     pub body: String,
     pub embed_pointer: Option<usize>,
@@ -13,7 +13,7 @@ pub struct Message {
 
 #[derive(Serialize, Deserialize)]
 pub struct File {
-    pub uuid: String,
+    pub username: String,
     pub auth_token: String,
     pub filename: String,
     pub data: String
@@ -21,7 +21,7 @@ pub struct File {
 
 #[derive(Serialize, Deserialize)]
 pub struct Command {
-    pub uuid: String,
+    pub username: String,
     pub auth_token: String,
     pub command_type: String,
     pub args: Vec<String>
