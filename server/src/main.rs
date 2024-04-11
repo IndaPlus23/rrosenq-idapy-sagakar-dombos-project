@@ -1,3 +1,5 @@
+use shared::Message;
+use serde_json::{from_str, to_string};
 use std::sync::Arc;
 use tokio::net::{TcpListener, tcp};
 use tokio::sync::{mpsc, Mutex};
@@ -20,13 +22,13 @@ impl Server {
 
     async fn start(mut self) -> Result<(), Box<dyn std::error::Error>>{
         let listener = TcpListener::bind(self.config["listen_address"].as_str().ok_or("Invalid address")?).await?;
-        let (message_tx, message_rx) = mpsc::channel::<String>(1);
+        let (message_tx, message_rx) = mpsc::channel::<Message>(1);
         self.begin_listen(listener, message_tx);
         self.begin_broadcast(message_rx);
         Ok(())
     }
 
-    fn begin_listen(&mut self, listener: TcpListener, message_tx: mpsc::Sender<String>) {
+    fn begin_listen(&mut self, listener: TcpListener, message_tx: mpsc::Sender<Message>) {
         let write_streams = self.write_streams.clone();
         tokio::spawn(async move {
             loop {
@@ -46,15 +48,20 @@ impl Server {
         });
     }
 
-    fn begin_broadcast(&self, mut message_rx: mpsc::Receiver<String>) {
+    fn begin_broadcast(&self, mut message_rx: mpsc::Receiver<Message>) {
         let write_streams = self.write_streams.clone();
         tokio::spawn(async move {
             while let Some(message) = message_rx.recv().await {
-                print!("{}", message);
+                print!("<{}> {}", message.username, message.body);
                 let mut bad_addresses: Vec<std::net::SocketAddr> = Vec::new();
                 let mut streams_locked = write_streams.lock().await;
                 for (address, stream) in streams_locked.iter_mut() {
-                    match stream.write_all(message.as_bytes()).await {
+                    let outgoing_message = match to_string(&message) {
+                        Ok(data) => data,
+                        Err(_) => return,
+                    };
+                    let outgoing_message = outgoing_message + "\n";
+                    match stream.write_all(outgoing_message.as_bytes()).await {
                         Ok(_) => {},
                         Err(_) => {
                             let _res = stream.shutdown().await;
@@ -78,7 +85,7 @@ async fn main() {
 
 
 
-async fn listen_messages(stream: tcp::OwnedReadHalf, message_tx: mpsc::Sender<String>) {
+async fn listen_messages(stream: tcp::OwnedReadHalf, message_tx: mpsc::Sender<Message>) {
     let mut reader = BufReader::new(stream);
     let mut buffer = String::new();
     loop {
@@ -86,6 +93,10 @@ async fn listen_messages(stream: tcp::OwnedReadHalf, message_tx: mpsc::Sender<St
         if reader.read_line(&mut buffer).await.is_err() {
             return; // If we receive some nonsense or the stream is dead, end the task
         }
-        message_tx.send(buffer.clone()).await.unwrap();
+        let message = match from_str::<Message>(&buffer) {
+            Ok(data) => data,
+            Err(_) => return 
+        };
+        message_tx.send(message).await.unwrap();
     }
 }
