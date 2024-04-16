@@ -1,13 +1,13 @@
-use serde::{Serialize, Deserialize};
+pub use serde::{Serialize, Deserialize};
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Message {
     Text(TextMessage),
     File(FileMessage),
     Command(CommandMessage),
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TextMessage {
     pub username: String,
     pub auth_token: String,
@@ -18,7 +18,7 @@ pub struct TextMessage {
     pub timestamp: u64
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FileMessage {
     pub username: String,
     pub auth_token: String,
@@ -26,7 +26,7 @@ pub struct FileMessage {
     pub data: String
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CommandMessage {
     pub username: String,
     pub auth_token: String,
