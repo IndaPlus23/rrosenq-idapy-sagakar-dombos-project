@@ -1,0 +1,28 @@
+#messages {
+  width: 40em;
+  height: 20em;
+  overflow-y: scroll;
+  word-wrap: break-word;
+  position: relative;
+  border: 2px solid black;
+}
+
+#inner-messages {
+  overflow-anchor: none;
+}
+
+#testtt {
+  width: 50em;
+}
+
+#subm {
+  width: 5em;
+}
+
+p {
+  display: block;
+  margin-block-start: 1em;
+  margin-block-end: 1em;
+  margin-inline-start: 0px;
+  margin-inline-end: 0px;
+}
