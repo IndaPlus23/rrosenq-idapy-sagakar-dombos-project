@@ -1,7 +1,9 @@
 use rusqlite::Connection;
-use shared::{Message, TextMessage};
+use shared::{CommandMessage, Message, TextMessage};
 use serde_json::{from_str, to_string};
+use std::collections::HashMap;
 use std::error::Error;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, tcp};
 use tokio::sync::{mpsc, Mutex};
@@ -10,7 +12,7 @@ use toml::Table;
 
 struct Server<> {
     config: Table,
-    write_streams: Arc<Mutex<Vec<(std::net::SocketAddr, tcp::OwnedWriteHalf)>>>,
+    write_streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>,
     database: Arc<Mutex<Connection>>,
 }
 
@@ -21,7 +23,7 @@ impl Server {
         let database = Arc::new(Mutex::new(Connection::open(db_address)?));
         Ok(Server {
             config,
-            write_streams: Arc::new(Mutex::new(Vec::new())),
+            write_streams: Arc::new(Mutex::new(HashMap::new())),
             database,
         })
     }
@@ -31,15 +33,18 @@ impl Server {
 
         let (text_tx_raw, text_rx_raw) = mpsc::channel::<TextMessage>(1);
         let (text_tx_processed, text_rx_processed) = mpsc::channel::<TextMessage>(1);
+        // The command channel needs the address of the caller for sending targeted data instead of broadcasting
+        let (command_tx, command_rx) = mpsc::channel::<(CommandMessage, SocketAddr)>(1);
 
-        self.begin_listen(listener, text_tx_raw);
+        self.begin_listen(listener, text_tx_raw, command_tx);
         self.begin_broadcast(text_rx_processed);
-        tokio::spawn(process_and_save(self.database.clone(), text_rx_raw, text_tx_processed));
+        tokio::spawn(process_and_save(self.database.clone(),text_rx_raw,text_tx_processed));
+        self.begin_parse_commands(command_rx);
         
         Ok(())
     }
 
-    fn begin_listen(&mut self, listener: TcpListener, text_tx: mpsc::Sender<TextMessage>) {
+    fn begin_listen(&mut self, listener: TcpListener, text_tx: mpsc::Sender<TextMessage>, command_tx: mpsc::Sender<(CommandMessage, SocketAddr)>) {
         let write_streams = self.write_streams.clone();
         tokio::spawn(async move {
             loop {
@@ -52,8 +57,8 @@ impl Server {
                 };
                 let (read_stream, write_stream) = stream.into_split();
                 let mut writes_locked = write_streams.lock().await;
-                writes_locked.push((address, write_stream));
-                tokio::spawn(listen_messages(read_stream, text_tx.clone()));
+                writes_locked.insert(address, write_stream);
+                tokio::spawn(listen_messages(read_stream, address, text_tx.clone(), command_tx.clone()));
             
             }
         });
@@ -80,9 +85,35 @@ impl Server {
                         }
                     }
                 }
-                streams_locked.retain(|(addr, _stream)| !bad_addresses.contains(&addr));
+                streams_locked.retain(|addr, _stream| !bad_addresses.contains(&addr));
             }
         });
+    }
+
+    /// Start a task to parse commands and send them off to be handled
+    fn begin_parse_commands(&self, mut command_rx: mpsc::Receiver<(CommandMessage, SocketAddr)>) {
+        let write_streams = self.write_streams.clone();
+        let db = self.database.clone();
+        tokio::spawn(async move {
+            while let Some((cmd, address)) = command_rx.recv().await {
+                match cmd.command_type.as_str() {
+                    // User requests message history
+                    "history" => {
+                        let (_channel, count) = (cmd.args[0].clone(), cmd.args[1].clone());
+                        let count = match count.parse() {
+                            Ok(res) => res,
+                            Err(_) => continue // We will not crashing the thread over a malformed command thank you very much
+                        };
+                        match retrieve_history(address, db.clone(), count, write_streams.clone()).await {
+                            Ok(_) => {},
+                            Err(error) => eprintln!("{:?}", error)
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        
     }
 }
 
@@ -94,7 +125,7 @@ async fn main() {
     loop {}
 }
 
-async fn listen_messages(stream: tcp::OwnedReadHalf, text_tx: mpsc::Sender<TextMessage>) {
+async fn listen_messages(stream: tcp::OwnedReadHalf, address: SocketAddr, text_tx: mpsc::Sender<TextMessage>, command_tx: mpsc::Sender<(CommandMessage, SocketAddr)>) {
     use shared::Message as m;
     let mut reader = BufReader::new(stream);
     let mut buffer = String::new();
@@ -108,7 +139,8 @@ async fn listen_messages(stream: tcp::OwnedReadHalf, text_tx: mpsc::Sender<TextM
             Err(_) => return 
         };
         match message {
-            m::Text(content) => {text_tx.send(content).await.unwrap();},
+            m::Text(content) => {text_tx.send(content).await.unwrap();}, // Send off to save in database and broadcast
+            m::Command(content) => {command_tx.send((content, address)).await.unwrap();},
             _ => {}
         };
     }
@@ -118,7 +150,7 @@ async fn listen_messages(stream: tcp::OwnedReadHalf, text_tx: mpsc::Sender<TextM
 async fn process_and_save(
     db: Arc<Mutex<Connection>>,
     mut text_rx_raw: mpsc::Receiver<TextMessage>,
-    text_tx_processed: mpsc::Sender<TextMessage>
+    text_tx_processed: mpsc::Sender<TextMessage>,
 ) -> rusqlite::Result<()> {
     // Make sure that we actually have a history table
     {
@@ -163,5 +195,43 @@ async fn process_and_save(
         text_tx_processed.send(msg).await.unwrap();
     }
     println!("process and save exiting");
+    Ok(())
+}
+
+/// Retrieve a specified number of messages from the history database and send them to the user who requested them
+async fn retrieve_history(
+    address: std::net::SocketAddr,
+    db: Arc<Mutex<Connection>>,
+    count: usize,
+    streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>
+) -> rusqlite::Result<()> {
+    // Get the messages from the database
+    let messages = {
+        let db_locked = db.lock().await;
+        let mut statement = db_locked.prepare(&format!("SELECT * FROM history ORDER BY id DESC LIMIT {count};"))?;
+        let mut msgs = statement.query_map((), |row| {
+            // The query_map *has* to return an iterator of rusql::Result
+            Ok(TextMessage {
+                message_id: row.get(0)?,
+                username: row.get(1)?,
+                body: row.get(2)?,
+                timestamp: row.get(3)?,
+                embed_pointer: row.get::<usize, Option<usize>>(4)?,
+                embed_type: row.get::<usize, Option<String>>(5)?,
+                auth_token: "".to_owned()
+            })
+        })?
+            .map(|res| res.unwrap())
+            .collect::<Vec<TextMessage>>();
+        msgs.reverse(); // Rows come in the wrong order by default
+        msgs.clone()
+    };
+    // Write the messages
+    let mut streams_locked = streams.lock().await;
+    let stream = streams_locked.get_mut(&address).unwrap();
+    for message in messages {
+        let serialized = to_string(&message).unwrap() + "\n";
+        let _res = stream.write_all(&serialized.as_bytes()).await;
+    }
     Ok(())
 }
