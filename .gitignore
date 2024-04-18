@@ -177,4 +177,8 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+### SQLite
+# SQLite database file
+*.sqlite
+
 # End of https://www.toptal.com/developers/gitignore/api/rust,macos,windows,linux,visualstudiocode,emacs,vim

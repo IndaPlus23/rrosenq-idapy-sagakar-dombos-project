@@ -1,1 +1,2 @@
 listen_address = "127.0.0.1:5656"
+db_path = "./server.sqlite"
