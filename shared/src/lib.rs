@@ -5,6 +5,7 @@ pub enum Message {
     Text(TextMessage),
     File(FileMessage),
     Command(CommandMessage),
+    Auth(AuthMessage)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -32,4 +33,11 @@ pub struct CommandMessage {
     pub auth_token: String,
     pub command_type: String,
     pub args: Vec<String>
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AuthMessage {
+    pub username: String,
+    pub auth_token: Option<String>,
+    pub pass_hash: Option<String>
 }
