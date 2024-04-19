@@ -39,5 +39,5 @@ pub struct CommandMessage {
 pub struct AuthMessage {
     pub username: String,
     pub auth_token: Option<String>,
-    pub pass_hash: Option<String>
+    pub password: Option<String>
 }
