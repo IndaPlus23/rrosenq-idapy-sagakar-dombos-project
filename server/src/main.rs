@@ -1,6 +1,10 @@
-use rusqlite::Connection;
-use shared::{CommandMessage, Message, TextMessage};
+use base64ct::{Base64, Encoding};
+use rand::{thread_rng, Rng};
+use rand::distributions::Alphanumeric;
+use rusqlite::{Connection, OptionalExtension};
+use shared::{AuthMessage, CommandMessage, Message, TextMessage};
 use serde_json::{from_str, to_string};
+use sha2::{Sha256, Digest};
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::SocketAddr;
@@ -14,17 +18,43 @@ struct Server<> {
     config: Table,
     write_streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>,
     database: Arc<Mutex<Connection>>,
+    session_tokens: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl Server {
     fn new(config: String) -> Result<Server, Box<dyn Error>>{
         let config = config.parse::<Table>()?;
         let db_address = config["db_path"].as_str().ok_or("Invalid database path")?;
-        let database = Arc::new(Mutex::new(Connection::open(db_address)?));
+
+        // Make sure that the password hash and salt tables exist
+        let connection = Connection::open(db_address)?;
+        connection.execute(
+            "
+            CREATE TABLE IF NOT EXISTS hashes
+            (
+                username TEXT PRIMARY KEY,
+                hash TEXT NOT NULL
+            );
+            ",
+            ()
+        )?;
+        connection.execute(
+            "
+            CREATE TABLE IF NOT EXISTS salts
+            (
+                username TEXT PRIMARY KEY,
+                salt TEXT NOT NULL
+            );
+            ",
+            ()
+        )?;
+
+        let database = Arc::new(Mutex::new(connection));
         Ok(Server {
             config,
             write_streams: Arc::new(Mutex::new(HashMap::new())),
             database,
+            session_tokens: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -46,6 +76,8 @@ impl Server {
 
     fn begin_listen(&mut self, listener: TcpListener, text_tx: mpsc::Sender<TextMessage>, command_tx: mpsc::Sender<(CommandMessage, SocketAddr)>) {
         let write_streams = self.write_streams.clone();
+        let db = self.database.clone();
+        let tokens = self.session_tokens.clone();
         tokio::spawn(async move {
             loop {
                 let (stream, address) = match listener.accept().await {
@@ -55,11 +87,22 @@ impl Server {
                         continue;
                     }
                 };
-                let (read_stream, write_stream) = stream.into_split();
+                let (read_stream, mut write_stream) = stream.into_split();
+                let mut reader = BufReader::new(read_stream);
+                match authenticate(&mut reader, db.clone(), tokens.clone()).await {
+                    Ok(Some(response)) => {
+                        match write_stream.write_all(response.as_bytes()).await {
+                            Ok(_) => {},
+                            Err(e) => eprintln!("{:?}", e)
+                        }
+                    },
+                    Ok(None) => {continue},
+                    Err(e) => {eprintln!("{}", e);}
+                };
+                
                 let mut writes_locked = write_streams.lock().await;
                 writes_locked.insert(address, write_stream);
-                tokio::spawn(listen_messages(read_stream, address, text_tx.clone(), command_tx.clone()));
-            
+                tokio::spawn(listen_messages(reader, address, tokens.clone(), text_tx.clone(), command_tx.clone()));
             }
         });
     }
@@ -69,6 +112,7 @@ impl Server {
         tokio::spawn(async move {
             while let Some(message) = message_rx.recv().await {
                 print!("<{}> {}", message.username, message.body);
+                let message = Message::Text(message);
                 let mut bad_addresses: Vec<std::net::SocketAddr> = Vec::new();
                 let mut streams_locked = write_streams.lock().await;
                 for (address, stream) in streams_locked.iter_mut() {
@@ -125,9 +169,14 @@ async fn main() {
     loop {}
 }
 
-async fn listen_messages(stream: tcp::OwnedReadHalf, address: SocketAddr, text_tx: mpsc::Sender<TextMessage>, command_tx: mpsc::Sender<(CommandMessage, SocketAddr)>) {
+async fn listen_messages(
+    mut reader: BufReader<tcp::OwnedReadHalf>,
+    address: SocketAddr,
+    tokens: Arc<Mutex<HashMap<String, String>>>,
+    text_tx: mpsc::Sender<TextMessage>,
+    command_tx: mpsc::Sender<(CommandMessage, SocketAddr)>,
+) {
     use shared::Message as m;
-    let mut reader = BufReader::new(stream);
     let mut buffer = String::new();
     loop {
         buffer.clear();
@@ -138,6 +187,10 @@ async fn listen_messages(stream: tcp::OwnedReadHalf, address: SocketAddr, text_t
             Ok(data) => data,
             Err(_) => return 
         };
+        if !is_authentic(message.clone(), tokens.clone()).await {
+            eprintln!("User {} provided an invalid session token, disconnecting...", message.username());
+            return
+        }
         match message {
             m::Text(content) => {text_tx.send(content).await.unwrap();}, // Send off to save in database and broadcast
             m::Command(content) => {command_tx.send((content, address)).await.unwrap();},
@@ -211,7 +264,7 @@ async fn retrieve_history(
         let mut statement = db_locked.prepare(&format!("SELECT * FROM history ORDER BY id DESC LIMIT {count};"))?;
         let mut msgs = statement.query_map((), |row| {
             // The query_map *has* to return an iterator of rusql::Result
-            Ok(TextMessage {
+            Ok(Message::Text(TextMessage {
                 message_id: row.get(0)?,
                 username: row.get(1)?,
                 body: row.get(2)?,
@@ -219,10 +272,10 @@ async fn retrieve_history(
                 embed_pointer: row.get::<usize, Option<usize>>(4)?,
                 embed_type: row.get::<usize, Option<String>>(5)?,
                 auth_token: "".to_owned()
-            })
+            }))
         })?
             .map(|res| res.unwrap())
-            .collect::<Vec<TextMessage>>();
+            .collect::<Vec<Message>>();
         msgs.reverse(); // Rows come in the wrong order by default
         msgs.clone()
     };
@@ -234,4 +287,98 @@ async fn retrieve_history(
         let _res = stream.write_all(&serialized.as_bytes()).await;
     }
     Ok(())
+}
+
+async fn authenticate(
+    reader: &mut BufReader<tcp::OwnedReadHalf>,
+    db: Arc<Mutex<Connection>>,
+    session_tokens: Arc<Mutex<HashMap<String, String>>>
+) -> Result<Option<String>, String> {
+    use shared::Message as m;
+    let mut buf = String::new();
+    reader.read_line(&mut buf).await.map_err(|e| e.to_string())?;
+    let auth_msg = from_str::<Message>(&buf).map_err(|e| e.to_string())?;
+    let auth_msg = match auth_msg {
+        m::Auth(inner) => inner,
+        _ => return Err("Did not receive authentication message".to_owned())
+    };
+    let auth_successful = {
+        // Get or generate the salt
+        let db_locked = db.lock().await;
+        let mut statement = db_locked
+            .prepare(&format!("SELECT salt FROM salts WHERE username='{}';",auth_msg.username))
+            .map_err(|e| e.to_string())?;
+        let salt_option = statement
+            .query_row((), |row| row.get::<usize, String>(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let salt = match salt_option {
+            Some(salt) => salt,
+            None => {
+                // If there is no salt, generate one and insert it into the database
+                let salt = rand_string(50);
+                db_locked.execute(
+                    &format!("INSERT INTO salts (username, salt) VALUES('{}', '{}');", auth_msg.username, salt),
+                    ()
+                ).map_err(|e| e.to_string())?;
+                salt
+            }
+        };
+
+        // Salt and hash password
+        let mut hasher = Sha256::new();
+        hasher.update((auth_msg.password.unwrap() + &salt).as_bytes());
+        let hashed_pass = hasher.finalize();
+        let hashed_pass = Base64::encode_string(&hashed_pass);
+
+        // Check or update the hashed password against the database
+        let mut statement = db_locked
+            .prepare(&format!("SELECT hash FROM hashes WHERE username = '{}';", auth_msg.username))
+            .map_err(|e| e.to_string())?;
+        let hash_option = statement
+            .query_row((), |row| row.get::<usize, String>(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match hash_option {
+            Some(hash) => hash == hashed_pass,
+            None => {
+                db_locked.execute(
+                    &format!("INSERT INTO hashes (username, hash) VALUES('{}', '{}');", auth_msg.username, hashed_pass),
+                    ()
+                ).map_err(|e| e.to_string())?;
+                true
+            }
+        }
+    };
+    if auth_successful {
+        let mut tokens_locked = session_tokens.lock().await;
+        let token = rand_string(100);
+        tokens_locked.insert(auth_msg.username.clone(), token.clone());
+        let response = Message::Auth(AuthMessage {
+            username: auth_msg.username,
+            auth_token: Some(token),
+            password: None
+        });
+        return Ok(Some(to_string(&response).map_err(|e| e.to_string())? + "\n"))
+    }
+    Ok(None)
+}
+
+fn rand_string(len: usize) -> String {
+    thread_rng()
+        .sample_iter(Alphanumeric)
+        .take(len)
+        .map(|byte| char::from(byte))
+        .collect::<String>()
+}
+
+async fn is_authentic(message: Message, tokens: Arc<Mutex<HashMap<String, String>>>) -> bool {
+    let username = message.username();
+    let tokens_locked = tokens.lock().await;
+    let stored_token = tokens_locked[&username].clone();
+    let message_token = match message.auth_token() {
+        Some(inner) => inner,
+        None => return false
+    };
+    return stored_token == message_token
 }
