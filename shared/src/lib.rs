@@ -8,6 +8,28 @@ pub enum Message {
     Auth(AuthMessage)
 }
 
+impl Message {
+    pub fn username(&self) -> String {
+        use Message as m;
+        match self {
+            m::Text(inner) => inner.username.clone(),
+            m::File(inner) => inner.username.clone(),
+            m::Command(inner) => inner.username.clone(),
+            m::Auth(inner) => inner.username.clone()
+        }
+    }
+
+    pub fn auth_token(&self) -> Option<String> {
+        use Message as m;
+        match self {
+            m::Text(inner) => Some(inner.auth_token.clone()),
+            m::File(inner) => Some(inner.auth_token.clone()),
+            m::Command(inner) => Some(inner.auth_token.clone()),
+            m::Auth(inner) => inner.auth_token.clone()
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TextMessage {
     pub username: String,
