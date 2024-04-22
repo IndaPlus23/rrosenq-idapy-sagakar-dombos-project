@@ -35,6 +35,7 @@ pub struct TextMessage {
     pub username: String,
     pub auth_token: String,
     pub body: String,
+    pub channel: String, // The message's target channel
     pub embed_pointer: Option<usize>,
     pub embed_type: Option<String>,
     pub message_id: Option<u32>,
