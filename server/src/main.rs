@@ -49,6 +49,21 @@ impl Server {
             ()
         )?;
 
+        // Make sure that we have a message history table for every channel
+        let channels = config["channels"].as_array().ok_or("Invalid channel configuration")?;
+        for channel in channels {
+            let channel = channel.as_str().ok_or("Invalid channel name")?;
+            connection.execute(&format!("CREATE TABLE IF NOT EXISTS {channel}
+                (
+                    id INTEGER PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+                    embed_pointer INTEGER,
+                    embed_type TEXT
+                );"),())?;
+        }
+
         let database = Arc::new(Mutex::new(connection));
         Ok(Server {
             config,
@@ -143,12 +158,12 @@ impl Server {
                 match cmd.command_type.as_str() {
                     // User requests message history
                     "history" => {
-                        let (_channel, count) = (cmd.args[0].clone(), cmd.args[1].clone());
+                        let (channel, count) = (cmd.args[0].clone(), cmd.args[1].clone());
                         let count = match count.parse() {
                             Ok(res) => res,
                             Err(_) => continue // We will not crashing the thread over a malformed command thank you very much
                         };
-                        match retrieve_history(address, db.clone(), count, write_streams.clone()).await {
+                        match retrieve_history(address, db.clone(), channel, count, write_streams.clone()).await {
                             Ok(_) => {},
                             Err(error) => eprintln!("{:?}", error)
                         }
@@ -205,21 +220,6 @@ async fn process_and_save(
     mut text_rx_raw: mpsc::Receiver<TextMessage>,
     text_tx_processed: mpsc::Sender<TextMessage>,
 ) -> rusqlite::Result<()> {
-    // Make sure that we actually have a history table
-    {
-        let db_locked = db.lock().await;
-        let query = "
-        CREATE TABLE IF NOT EXISTS history
-        (
-            id INTEGER PRIMARY KEY,
-            username TEXT NOT NULL,
-            body TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            embed_pointer INTEGER,
-            embed_type TEXT
-        );";
-        db_locked.execute(&query, ()).unwrap();
-    }
     // Await messages to process and send
     while let Some(mut msg) = text_rx_raw.recv().await {
         // First process the message by adding server-supplied data
@@ -234,11 +234,17 @@ async fn process_and_save(
         {
             // Write
             let query = format!("
-            INSERT INTO history (username, body, timestamp)
+            INSERT INTO {channel} (username, body, timestamp)
             VALUES('{username}', '{body}', '{timestamp}');
-            ", username = msg.username, body = msg.body, timestamp = msg.timestamp);
+            ", username = msg.username, body = msg.body, timestamp = msg.timestamp, channel = msg.channel);
             let db_locked = db.lock().await;
-            db_locked.execute(&query, ()).unwrap();
+            match db_locked.execute(&query, ()) {
+                Ok(_) => {},
+                Err(_) => {
+                    eprintln!("User {} attempted to access invalid channel {}, discarding...", msg.username, msg.channel);
+                    continue;
+                }
+            }
 
             // Retrieve id
             msg.message_id = Some(db_locked.last_insert_rowid() as u32);
@@ -255,19 +261,21 @@ async fn process_and_save(
 async fn retrieve_history(
     address: std::net::SocketAddr,
     db: Arc<Mutex<Connection>>,
+    channel: String,
     count: usize,
     streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>
 ) -> rusqlite::Result<()> {
     // Get the messages from the database
     let messages = {
         let db_locked = db.lock().await;
-        let mut statement = db_locked.prepare(&format!("SELECT * FROM history ORDER BY id DESC LIMIT {count};"))?;
+        let mut statement = db_locked.prepare(&format!("SELECT * FROM {channel} ORDER BY id DESC LIMIT {count};"))?;
         let mut msgs = statement.query_map((), |row| {
             // The query_map *has* to return an iterator of rusql::Result
             Ok(Message::Text(TextMessage {
                 message_id: row.get(0)?,
                 username: row.get(1)?,
                 body: row.get(2)?,
+                channel: channel.clone(),
                 timestamp: row.get(3)?,
                 embed_pointer: row.get::<usize, Option<usize>>(4)?,
                 embed_type: row.get::<usize, Option<String>>(5)?,

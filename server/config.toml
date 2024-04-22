@@ -1,2 +1,5 @@
 listen_address = "127.0.0.1:5656"
 db_path = "./server.sqlite"
+
+# Server properties
+channels = ["general", "general_2"]
