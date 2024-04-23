@@ -14,14 +14,21 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use toml::Table;
 
+// Holds data and essential helper methods for the chat server
 struct Server<> {
+     // A Key:value table of config settings loaded from config.toml
     config: Table,
+    // Holds socket addressess and their corresponding write streams. Used to keep track of alive streams for writing
     write_streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>,
+    // Holds all persistent user data including authentication data and message histories
     database: Arc<Mutex<Connection>>,
+    // Holds session tokens for authenticated users. Every incoming message is referenced against this
     session_tokens: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl Server {
+
+    /// Creates a server instance, sets up a database connection and reads config values.
     fn new(config: String) -> Result<Server, Box<dyn Error>>{
         let config = config.parse::<Table>()?;
         let db_address = config["db_path"].as_str().ok_or("Invalid database path")?;
@@ -73,6 +80,7 @@ impl Server {
         })
     }
 
+    /// Starts the server by launching all continuously running processes
     async fn start(mut self) -> Result<(), Box<dyn Error>>{
         let listener = TcpListener::bind(self.config["listen_address"].as_str().ok_or("Invalid address")?).await?;
 
@@ -89,11 +97,14 @@ impl Server {
         Ok(())
     }
 
+    /// Starts a process to listen for incoming connections. If the connection is valid and successfully authenticates,
+    /// starts a process to accept messages from the stream. Otherwise the connection is dropped
     fn begin_listen(&mut self, listener: TcpListener, text_tx: mpsc::Sender<TextMessage>, command_tx: mpsc::Sender<(CommandMessage, SocketAddr)>) {
         let write_streams = self.write_streams.clone();
         let db = self.database.clone();
         let tokens = self.session_tokens.clone();
         tokio::spawn(async move {
+            // Endlessly accept incoming TCP connections
             loop {
                 let (stream, address) = match listener.accept().await {
                     Ok(val) => val, 
@@ -104,13 +115,16 @@ impl Server {
                 };
                 let (read_stream, mut write_stream) = stream.into_split();
                 let mut reader = BufReader::new(read_stream);
+                // Wait for an authentication message and authenticate the user
                 match authenticate(&mut reader, db.clone(), tokens.clone()).await {
+                    // If the user passes, send back the response message and keep going
                     Ok(Some(response)) => {
                         match write_stream.write_all(response.as_bytes()).await {
                             Ok(_) => {},
                             Err(e) => eprintln!("{:?}", e)
                         }
                     },
+                    // If the user does not pass authentication, drop them
                     Ok(None) => {continue},
                     Err(e) => {eprintln!("{}", e);}
                 };
@@ -122,20 +136,26 @@ impl Server {
         });
     }
 
+    /// Starts a task to broadcast messages to all server users
     fn begin_broadcast(&self, mut message_rx: mpsc::Receiver<TextMessage>) {
         let write_streams = self.write_streams.clone();
         tokio::spawn(async move {
+            // While the text message channel is open, receive new messages
             while let Some(message) = message_rx.recv().await {
                 print!("<{}> {}", message.username, message.body);
                 let message = Message::Text(message);
-                let mut bad_addresses: Vec<std::net::SocketAddr> = Vec::new();
+                let mut bad_addresses: Vec<std::net::SocketAddr> = Vec::new(); // Users that fail to communicate will be purged
                 let mut streams_locked = write_streams.lock().await;
+                // Iterate through all users and send the received message
                 for (address, stream) in streams_locked.iter_mut() {
+                    // If the message is valid JSON, were good. If it's cringe, don't bother sending it
                     let outgoing_message = match to_string(&message) {
                         Ok(data) => data,
-                        Err(_) => return,
+                        Err(_) => continue,
                     };
                     let outgoing_message = outgoing_message + "\n";
+                    // Write to the current stream
+                    // If you're good nothing happens, if it fails you go on the cringe list!
                     match stream.write_all(outgoing_message.as_bytes()).await {
                         Ok(_) => {},
                         Err(_) => {
@@ -144,6 +164,7 @@ impl Server {
                         }
                     }
                 }
+                // Purge the cringe list
                 streams_locked.retain(|addr, _stream| !bad_addresses.contains(&addr));
             }
         });
@@ -158,11 +179,13 @@ impl Server {
                 match cmd.command_type.as_str() {
                     // User requests message history
                     "history" => {
+                        // Get the arguments
                         let (channel, count) = (cmd.args[0].clone(), cmd.args[1].clone());
                         let count = match count.parse() {
                             Ok(res) => res,
                             Err(_) => continue // We will not crashing the thread over a malformed command thank you very much
                         };
+                        // Fetch and send the history
                         match retrieve_history(address, db.clone(), channel, count, write_streams.clone()).await {
                             Ok(_) => {},
                             Err(error) => eprintln!("{:?}", error)
@@ -184,6 +207,7 @@ async fn main() {
     loop {}
 }
 
+/// Listen for incoming messages on a stream and send them off to the right process
 async fn listen_messages(
     mut reader: BufReader<tcp::OwnedReadHalf>,
     address: SocketAddr,
@@ -195,17 +219,21 @@ async fn listen_messages(
     let mut buffer = String::new();
     loop {
         buffer.clear();
+         // If we receive some nonsense or the stream is dead, end the task
+         // Dropping the stream will shut down the read half
         if reader.read_line(&mut buffer).await.is_err() {
-            return; // If we receive some nonsense or the stream is dead, end the task
+            return;
         }
         let message = match from_str::<Message>(&buffer) {
             Ok(data) => data,
             Err(_) => return 
         };
+        // Check that the message has a valid session token
         if !is_authentic(message.clone(), tokens.clone()).await {
             eprintln!("User {} provided an invalid session token, disconnecting...", message.username());
             return
         }
+        // Check the type of the message and send the contents to the right process
         match message {
             m::Text(content) => {text_tx.send(content).await.unwrap();}, // Send off to save in database and broadcast
             m::Command(content) => {command_tx.send((content, address)).await.unwrap();},
@@ -297,12 +325,18 @@ async fn retrieve_history(
     Ok(())
 }
 
+/// Authenticate new connections
+/// If the user already exists, references their password against the database
+/// If the user is new, adds them to said database
+/// Returns a response message if authentication is successful
 async fn authenticate(
     reader: &mut BufReader<tcp::OwnedReadHalf>,
     db: Arc<Mutex<Connection>>,
     session_tokens: Arc<Mutex<HashMap<String, String>>>
 ) -> Result<Option<String>, String> {
     use shared::Message as m;
+
+    // Receive the authentication message
     let mut buf = String::new();
     reader.read_line(&mut buf).await.map_err(|e| e.to_string())?;
     let auth_msg = from_str::<Message>(&buf).map_err(|e| e.to_string())?;
@@ -310,6 +344,8 @@ async fn authenticate(
         m::Auth(inner) => inner,
         _ => return Err("Did not receive authentication message".to_owned())
     };
+
+    // Determine if the authentication was successful
     let auth_successful = {
         // Get or generate the salt
         let db_locked = db.lock().await;
@@ -359,9 +395,11 @@ async fn authenticate(
         }
     };
     if auth_successful {
+        // Generate a session token
         let mut tokens_locked = session_tokens.lock().await;
         let token = rand_string(100);
         tokens_locked.insert(auth_msg.username.clone(), token.clone());
+        // Build the respone
         let response = Message::Auth(AuthMessage {
             username: auth_msg.username,
             auth_token: Some(token),
@@ -372,6 +410,7 @@ async fn authenticate(
     Ok(None)
 }
 
+/// Generate a random string of length `len`
 fn rand_string(len: usize) -> String {
     thread_rng()
         .sample_iter(Alphanumeric)
@@ -380,6 +419,7 @@ fn rand_string(len: usize) -> String {
         .collect::<String>()
 }
 
+/// Determines whether the session token of a message matches the session token generated by the server
 async fn is_authentic(message: Message, tokens: Arc<Mutex<HashMap<String, String>>>) -> bool {
     let username = message.username();
     let tokens_locked = tokens.lock().await;
