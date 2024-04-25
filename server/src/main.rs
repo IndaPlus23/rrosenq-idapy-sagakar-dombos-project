@@ -7,7 +7,6 @@ use serde_json::{from_str, to_string};
 use sha2::{Sha256, Digest};
 use std::collections::HashMap;
 use std::error::Error;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, tcp};
 use tokio::sync::{mpsc, Mutex};
@@ -19,7 +18,7 @@ struct Server<> {
      // A Key:value table of config settings loaded from config.toml
     config: Table,
     // Holds socket addressess and their corresponding write streams. Used to keep track of alive streams for writing
-    write_streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>,
+    write_streams: Arc<Mutex<HashMap<String, tcp::OwnedWriteHalf>>>,
     // Holds all persistent user data including authentication data and message histories
     database: Arc<Mutex<Connection>>,
     // Holds session tokens for authenticated users. Every incoming message is referenced against this
@@ -71,6 +70,9 @@ impl Server {
                 );"),())?;
         }
 
+        // Create a table of server users (usernames that have logged in at least once)
+        connection.execute("CREATE TABLE IF NOT EXISTS user_hashes (hash INTEGER PRIMARY KEY);", ())?;
+
         let database = Arc::new(Mutex::new(connection));
         Ok(Server {
             config,
@@ -87,7 +89,7 @@ impl Server {
         let (text_tx_raw, text_rx_raw) = mpsc::channel::<TextMessage>(1);
         let (text_tx_processed, text_rx_processed) = mpsc::channel::<TextMessage>(1);
         // The command channel needs the address of the caller for sending targeted data instead of broadcasting
-        let (command_tx, command_rx) = mpsc::channel::<(CommandMessage, SocketAddr)>(1);
+        let (command_tx, command_rx) = mpsc::channel::<CommandMessage>(1);
 
         self.begin_listen(listener, text_tx_raw, command_tx);
         self.begin_broadcast(text_rx_processed);
@@ -99,14 +101,14 @@ impl Server {
 
     /// Starts a process to listen for incoming connections. If the connection is valid and successfully authenticates,
     /// starts a process to accept messages from the stream. Otherwise the connection is dropped
-    fn begin_listen(&mut self, listener: TcpListener, text_tx: mpsc::Sender<TextMessage>, command_tx: mpsc::Sender<(CommandMessage, SocketAddr)>) {
+    fn begin_listen(&mut self, listener: TcpListener, text_tx: mpsc::Sender<TextMessage>, command_tx: mpsc::Sender<CommandMessage>) {
         let write_streams = self.write_streams.clone();
         let db = self.database.clone();
         let tokens = self.session_tokens.clone();
         tokio::spawn(async move {
             // Endlessly accept incoming TCP connections
             loop {
-                let (stream, address) = match listener.accept().await {
+                let (stream, _) = match listener.accept().await {
                     Ok(val) => val, 
                     Err(_) => {
                         eprintln!("Failed to accept incoming TCP stream");
@@ -116,22 +118,23 @@ impl Server {
                 let (read_stream, mut write_stream) = stream.into_split();
                 let mut reader = BufReader::new(read_stream);
                 // Wait for an authentication message and authenticate the user
-                match authenticate(&mut reader, db.clone(), tokens.clone()).await {
-                    // If the user passes, send back the response message and keep going
-                    Ok(Some(response)) => {
-                        match write_stream.write_all(response.as_bytes()).await {
-                            Ok(_) => {},
-                            Err(e) => eprintln!("{:?}", e)
-                        }
-                    },
+                let response = match authenticate(&mut reader, db.clone(), tokens.clone()).await {
+                    // If the user passes, get the response
+                    Ok(Some(response)) => response,
                     // If the user does not pass authentication, drop them
                     Ok(None) => {continue},
-                    Err(e) => {eprintln!("{}", e);}
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        continue;
+                    }
                 };
-                
+                // Write the response to the user, drop them if it fails
+                if write_stream.write_all(&to_string(&response).unwrap().as_bytes()).await.is_err() {
+                    continue;
+                }
                 let mut writes_locked = write_streams.lock().await;
-                writes_locked.insert(address, write_stream);
-                tokio::spawn(listen_messages(reader, address, tokens.clone(), text_tx.clone(), command_tx.clone()));
+                writes_locked.insert(response.username(), write_stream);
+                tokio::spawn(listen_messages(reader, tokens.clone(), text_tx.clone(), command_tx.clone()));
             }
         });
     }
@@ -144,7 +147,7 @@ impl Server {
             while let Some(message) = message_rx.recv().await {
                 print!("<{}> {}", message.username, message.body);
                 let message = Message::Text(message);
-                let mut bad_addresses: Vec<std::net::SocketAddr> = Vec::new(); // Users that fail to communicate will be purged
+                let mut bad_addresses: Vec<String> = Vec::new(); // Users that fail to communicate will be purged
                 let mut streams_locked = write_streams.lock().await;
                 // Iterate through all users and send the received message
                 for (address, stream) in streams_locked.iter_mut() {
@@ -171,11 +174,11 @@ impl Server {
     }
 
     /// Start a task to parse commands and send them off to be handled
-    fn begin_parse_commands(&self, mut command_rx: mpsc::Receiver<(CommandMessage, SocketAddr)>) {
+    fn begin_parse_commands(&self, mut command_rx: mpsc::Receiver<CommandMessage>) {
         let write_streams = self.write_streams.clone();
         let db = self.database.clone();
         tokio::spawn(async move {
-            while let Some((cmd, address)) = command_rx.recv().await {
+            while let Some(cmd) = command_rx.recv().await {
                 match cmd.command_type.as_str() {
                     // User requests message history
                     "history" => {
@@ -186,7 +189,7 @@ impl Server {
                             Err(_) => continue // We will not crashing the thread over a malformed command thank you very much
                         };
                         // Fetch and send the history
-                        match retrieve_history(address, db.clone(), channel, count, write_streams.clone()).await {
+                        match retrieve_history(&cmd.username, db.clone(), channel, count, write_streams.clone()).await {
                             Ok(_) => {},
                             Err(error) => eprintln!("{:?}", error)
                         }
@@ -210,10 +213,9 @@ async fn main() {
 /// Listen for incoming messages on a stream and send them off to the right process
 async fn listen_messages(
     mut reader: BufReader<tcp::OwnedReadHalf>,
-    address: SocketAddr,
     tokens: Arc<Mutex<HashMap<String, String>>>,
     text_tx: mpsc::Sender<TextMessage>,
-    command_tx: mpsc::Sender<(CommandMessage, SocketAddr)>,
+    command_tx: mpsc::Sender<CommandMessage>,
 ) {
     use shared::Message as m;
     let mut buffer = String::new();
@@ -236,7 +238,7 @@ async fn listen_messages(
         // Check the type of the message and send the contents to the right process
         match message {
             m::Text(content) => {text_tx.send(content).await.unwrap();}, // Send off to save in database and broadcast
-            m::Command(content) => {command_tx.send((content, address)).await.unwrap();},
+            m::Command(content) => {command_tx.send(content).await.unwrap();},
             _ => {}
         };
     }
@@ -287,11 +289,11 @@ async fn process_and_save(
 
 /// Retrieve a specified number of messages from the history database and send them to the user who requested them
 async fn retrieve_history(
-    address: std::net::SocketAddr,
+    username: &str,
     db: Arc<Mutex<Connection>>,
     channel: String,
     count: usize,
-    streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>
+    streams: Arc<Mutex<HashMap<String, tcp::OwnedWriteHalf>>>
 ) -> rusqlite::Result<()> {
     // Get the messages from the database
     let messages = {
@@ -317,7 +319,7 @@ async fn retrieve_history(
     };
     // Write the messages
     let mut streams_locked = streams.lock().await;
-    let stream = streams_locked.get_mut(&address).unwrap();
+    let stream = streams_locked.get_mut(username).unwrap();
     for message in messages {
         let serialized = to_string(&message).unwrap() + "\n";
         let _res = stream.write_all(&serialized.as_bytes()).await;
@@ -333,7 +335,7 @@ async fn authenticate(
     reader: &mut BufReader<tcp::OwnedReadHalf>,
     db: Arc<Mutex<Connection>>,
     session_tokens: Arc<Mutex<HashMap<String, String>>>
-) -> Result<Option<String>, String> {
+) -> Result<Option<Message>, String> {
     use shared::Message as m;
 
     // Receive the authentication message
@@ -405,7 +407,7 @@ async fn authenticate(
             auth_token: Some(token),
             password: None
         });
-        return Ok(Some(to_string(&response).map_err(|e| e.to_string())? + "\n"))
+        return Ok(Some(response))
     }
     Ok(None)
 }
