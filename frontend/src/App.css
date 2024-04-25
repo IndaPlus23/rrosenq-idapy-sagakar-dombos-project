@@ -207,3 +207,23 @@ body {
   color: rgb(245, 29, 94);
 
 }
+
+.PageContent {
+  flex-grow: 1;
+  margin-top: 20px; 
+  margin-left: 130px; 
+  overflow-y: auto;
+  position: relative;
+  background-color: white; 
+}
+
+.HomePage{
+  background-color: rgb(28, 182, 90);
+  height: 100%;
+  width: 100%;
+}
+
+.HomePage .HomeText {
+  margin-top: 40px;
+  color: white;
+}
