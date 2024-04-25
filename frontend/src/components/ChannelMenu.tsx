@@ -1,13 +1,22 @@
 import '../App.css';
-import { ChannelData } from './ChannelData';
 
+interface ChannelItem {
+    title: string;
+    icon: JSX.Element;
+    link: string;
+}
 
-function ChannelMenu() {
+interface ChannelMenuProps {
+    data: ChannelItem[];
+    header: string;
+}
+
+const ChannelMenu: React.FC<ChannelMenuProps> = ({ data, header }) => {
     return (
         <div className='ChannelMenu'>
-            <h1 className='header'>Channels</h1>
+            <h1 className='header'>{header}</h1>
             <ul className="ChannelList">
-            {ChannelData.map((val, key) => {
+            {data.map((val, key) => {
                 return (
                     <li 
                         key={key} 

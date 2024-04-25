@@ -4,6 +4,11 @@ import Navbar from './components/Navbar';
 import Sidebar from "./components/Sidebar";
 import { Routes, Route, Navigate } from 'react-router-dom';
 import ChatPage from './pages/ChatPage';
+import ProfilePage from './pages/ProfilePage';
+import SettingsPage from './pages/SettingsPage';
+import DMPage from './pages/DMPage';
+import ServerPage from './pages/ServerPage';
+
 function App() {
 
   const [messages, setMessages] = useState<string[]>([]);
@@ -41,8 +46,27 @@ function App() {
                   sendMessage={sendMessage}
                   messageDisplayRef={messageDisplayRef}
                 />
-              </div>
-            } />
+              </div> } />
+              <Route path="/dm" element= {
+              <div className='DMPage'>
+                <DMPage
+                  messages={messages}
+                  sendMessage={sendMessage}
+                  messageDisplayRef={messageDisplayRef}
+                />
+              </div> } />
+            <Route path="/profile" element= {
+              <div className='ProfilePage'>
+                <ProfilePage />
+              </div> } />
+            <Route path='/settings' element= {
+              <div className='SettingsPage'>
+                <SettingsPage />
+              </div> } />
+            <Route path="/changeServer" element= {
+              <div className='ServerPage'>
+                <ServerPage />
+              </div> }/>
           </Routes>
         </div>
       </div>

@@ -1,8 +1,8 @@
-import '../components/ChannelMenu';
 import Chatbox from '../components/Chatbox';
 import MessageDisplay from '../components/ChatDisplay';
 import ChannelMenu from '../components/ChannelMenu';
-import { ChannelData } from '../components/ChannelData';
+import { DMData } from '../components/DMData';
+import React from 'react';
 
 interface ChatPageProps {
     messages: any[];
@@ -14,7 +14,7 @@ function ChatPage({ messages, sendMessage, messageDisplayRef }: ChatPageProps) {
     return (
         <div className='Chat'>
             <div className='ChannelMenu'>
-                <ChannelMenu data={ChannelData} header={"Channels"}/>
+                <ChannelMenu data={DMData} header={"Direct Messages"}/>
             </div>
             <div ref={messageDisplayRef} className='ChatDisplay'>
                 <MessageDisplay messages={messages} />

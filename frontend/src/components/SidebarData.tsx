@@ -18,11 +18,6 @@ export const SidebarData = [
         link: "/dm"
     },
 
-    {
-        title: "Settings",
-        icon: <SettingsIcon />,
-        link: "/settings"
-    },
 
     {
         title: "Profile",
@@ -30,5 +25,10 @@ export const SidebarData = [
         link: "/profile"
     },
 
+    {
+        title: "Settings",
+        icon: <SettingsIcon />,
+        link: "/settings"
+    },
 
 ]
