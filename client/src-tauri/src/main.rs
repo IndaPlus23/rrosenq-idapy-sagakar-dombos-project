@@ -65,8 +65,8 @@ async fn async_process_model(
 }
 
 fn recieve_message<R: tauri::Runtime>(message: String, manager: &impl Manager<R>) {
-    info!(?message, "recv_message");
-    manager.emit_all("recv_message", message).unwrap();
+    info!(?message, "recieve_message");
+    manager.emit_all("recieve_message", message).unwrap();
 }
 
 #[tauri::command]
