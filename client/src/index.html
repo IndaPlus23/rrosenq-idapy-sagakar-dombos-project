@@ -8,15 +8,10 @@
     <title>Document</title>
   </head>
   <body>
-    <h1 id="header">Welcome from Tauri!</h1>
-
-    <div id="messages">
-        <div id="inner-messages">
-        </div>
-    </div>
+    <h1 id="header">Give IP</h1>
     <div>
-        <input type="text" id="testtt">
-        <button type="button" id="subm" onclick="sendMessage(document.getElementById('testtt').value, 'You'); document.getElementById('testtt').value = ''">Submit</button>
+        <input type="text" id="ip-addr">
+        <button type="button" id="subm" onclick="handleConnection(document.getElementById('ip-addr').value); document.getElementById('ip-addr').value = ''">Submit</button>
     </div>
     
   </body>
