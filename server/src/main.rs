@@ -57,7 +57,7 @@ impl Server {
         )?;
 
         // Make sure that we have a message history table for every channel
-        let channels = config["channels"].as_array().ok_or("Invalid channel configuration")?;
+        let channels: &Vec<toml::Value> = config["channels"].as_array().ok_or("Invalid channel configuration")?;
         for channel in channels {
             let channel = channel.as_str().ok_or("Invalid channel name")?;
             connection.execute(&format!("CREATE TABLE IF NOT EXISTS {channel}
@@ -201,7 +201,7 @@ impl Server {
 
 #[tokio::main]
 async fn main() {
-    let config = std::fs::read_to_string("config.toml").expect("Failed to read config file");
+    let config: String = std::fs::read_to_string("config.toml").expect("Failed to read config file");
     let server = Server::new(config).expect("Failed to start server");
     server.start().await.expect("Failed to start server");
     loop {}
