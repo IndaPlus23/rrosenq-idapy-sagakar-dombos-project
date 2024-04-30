@@ -2,7 +2,7 @@ use base64ct::{Base64, Encoding};
 use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
 use rusqlite::{Connection, OptionalExtension};
-use shared::{AuthMessage, CommandMessage, Message, TextMessage};
+use shared::{AuthMessage, CommandMessage, InfoMessage, Message, TextMessage};
 use serde_json::{from_str, to_string};
 use sha2::{Sha256, Digest};
 use std::collections::HashMap;
@@ -174,6 +174,7 @@ impl Server {
     fn begin_parse_commands(&self, mut command_rx: mpsc::Receiver<(CommandMessage, SocketAddr)>) {
         let write_streams = self.write_streams.clone();
         let db = self.database.clone();
+        let config = self.config.clone();
         tokio::spawn(async move {
             while let Some((cmd, address)) = command_rx.recv().await {
                 match cmd.command_type.as_str() {
@@ -191,6 +192,13 @@ impl Server {
                             Err(error) => eprintln!("{:?}", error)
                         }
                     }
+                    //User requests a list of channels
+                    "channels" => {
+                        match retrive_channels(address, write_streams.clone(), &config).await {
+                            Ok(_) => {},
+                            Err(error) => eprintln!("{:?}", error)
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -199,9 +207,8 @@ impl Server {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    let config: String = std::fs::read_to_string("config.toml").expect("Failed to read config file");
+#[tokio::main]async fn main() {
+    let config = std::fs::read_to_string("config.toml").expect("Failed to read config file");
     let server = Server::new(config).expect("Failed to start server");
     server.start().await.expect("Failed to start server");
     loop {}
@@ -321,6 +328,27 @@ async fn retrieve_history(
     for message in messages {
         let serialized = to_string(&message).unwrap() + "\n";
         let _res = stream.write_all(&serialized.as_bytes()).await;
+    }
+    Ok(())
+}
+
+// Retrieve a list of the channels in the server
+async fn retrive_channels(
+    address: std::net::SocketAddr,
+    streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>,
+    config: &Table
+) -> Result<(), Box<dyn Error>> {
+    let channels = config["channels"].as_array().ok_or("Invalid channel configuration")?;
+
+    let mut streams_locked = streams.lock().await;
+    if let Some(stream) = streams_locked.get_mut(&address) {
+        let channels = to_string(channels)?;
+        let outgoing_msg = Message::Info(InfoMessage{
+           header: "channels\n".to_owned(),
+           data: channels 
+        });
+        let serialized = to_string(&outgoing_msg)? + "\n";
+        stream.write_all(serialized.as_bytes()).await?;
     }
     Ok(())
 }
