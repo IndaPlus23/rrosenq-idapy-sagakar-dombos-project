@@ -28,8 +28,8 @@ body {
 }
 
 .navbar-link {
-  background-color: pink;
-  color: white;
+  background-color: rgb(255, 199, 208);
+  color: black;
   padding: 7px;
   font-weight: bold;
   border-radius: 10px;
@@ -206,4 +206,54 @@ body {
   background-color: white;
   color: rgb(245, 29, 94);
 
+}
+
+.PageContent {
+  flex-grow: 1;
+  margin-top: 20px; 
+  margin-left: 130px; 
+  overflow-y: auto;
+  position: relative;
+  background-color: white; 
+}
+
+.ProfilePage {
+  width: 100%;
+  height: 100%;
+  margin-top: 40px;
+  background-color: yellowgreen;
+}
+
+.SettingsPage {
+  width: 100%;
+  height: 100%;
+  margin-top: 40px;
+  background-color: magenta;
+}
+
+.ServerPage {
+  width: 100%;
+  height: 100%;
+  margin-top: 40px;
+  background-color: peru;
+}
+
+.Buttons #one {
+  margin: 20px;
+  background-color: orange;
+}
+
+.Buttons #two {
+  margin: 20px;
+  background-color: tomato;
+}
+
+.Buttons #three {
+  margin: 20px;
+  background-color: darkcyan;
+}
+
+.Buttons #four {
+  margin: 20px;
+  background-color: mediumseagreen;
 }
