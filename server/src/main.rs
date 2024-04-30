@@ -5,9 +5,10 @@ use rusqlite::{Connection, OptionalExtension};
 use shared::{AuthMessage, CommandMessage, Message, TextMessage};
 use serde_json::{from_str, to_string};
 use sha2::{Sha256, Digest};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::error::Error;
-use std::net::SocketAddr;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::net::{TcpListener, tcp};
 use tokio::sync::{mpsc, Mutex};
@@ -19,7 +20,7 @@ struct Server<> {
      // A Key:value table of config settings loaded from config.toml
     config: Table,
     // Holds socket addressess and their corresponding write streams. Used to keep track of alive streams for writing
-    write_streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>,
+    write_streams: Arc<Mutex<HashMap<String, tcp::OwnedWriteHalf>>>,
     // Holds all persistent user data including authentication data and message histories
     database: Arc<Mutex<Connection>>,
     // Holds session tokens for authenticated users. Every incoming message is referenced against this
@@ -71,6 +72,12 @@ impl Server {
                 );"),())?;
         }
 
+        // Create a table of server users (usernames that have logged in at least once)
+        connection.execute("CREATE TABLE IF NOT EXISTS user_hashes (
+            username TEXT PRIMARY KEY,
+            hash INTEGER UNIQUE
+        );", ())?;
+
         let database = Arc::new(Mutex::new(connection));
         Ok(Server {
             config,
@@ -87,26 +94,25 @@ impl Server {
         let (text_tx_raw, text_rx_raw) = mpsc::channel::<TextMessage>(1);
         let (text_tx_processed, text_rx_processed) = mpsc::channel::<TextMessage>(1);
         // The command channel needs the address of the caller for sending targeted data instead of broadcasting
-        let (command_tx, command_rx) = mpsc::channel::<(CommandMessage, SocketAddr)>(1);
+        let (command_tx, command_rx) = mpsc::channel::<CommandMessage>(1);
 
         self.begin_listen(listener, text_tx_raw, command_tx);
         self.begin_broadcast(text_rx_processed);
         tokio::spawn(process_and_save(self.database.clone(),text_rx_raw,text_tx_processed));
         self.begin_parse_commands(command_rx);
-        
         Ok(())
     }
 
     /// Starts a process to listen for incoming connections. If the connection is valid and successfully authenticates,
     /// starts a process to accept messages from the stream. Otherwise the connection is dropped
-    fn begin_listen(&mut self, listener: TcpListener, text_tx: mpsc::Sender<TextMessage>, command_tx: mpsc::Sender<(CommandMessage, SocketAddr)>) {
+    fn begin_listen(&mut self, listener: TcpListener, text_tx: mpsc::Sender<TextMessage>, command_tx: mpsc::Sender<CommandMessage>) {
         let write_streams = self.write_streams.clone();
         let db = self.database.clone();
         let tokens = self.session_tokens.clone();
         tokio::spawn(async move {
             // Endlessly accept incoming TCP connections
             loop {
-                let (stream, address) = match listener.accept().await {
+                let (stream, _) = match listener.accept().await {
                     Ok(val) => val, 
                     Err(_) => {
                         eprintln!("Failed to accept incoming TCP stream");
@@ -116,22 +122,31 @@ impl Server {
                 let (read_stream, mut write_stream) = stream.into_split();
                 let mut reader = BufReader::new(read_stream);
                 // Wait for an authentication message and authenticate the user
-                match authenticate(&mut reader, db.clone(), tokens.clone()).await {
-                    // If the user passes, send back the response message and keep going
-                    Ok(Some(response)) => {
-                        match write_stream.write_all(response.as_bytes()).await {
-                            Ok(_) => {},
-                            Err(e) => eprintln!("{:?}", e)
-                        }
-                    },
+                let response = match authenticate(&mut reader, db.clone(), tokens.clone()).await {
+                    // If the user passes, get the response
+                    Ok(Some(response)) => response,
                     // If the user does not pass authentication, drop them
                     Ok(None) => {continue},
-                    Err(e) => {eprintln!("{}", e);}
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        continue;
+                    }
                 };
-                
+                // Write the response to the user, drop them if it fails
+                let username = response.username();
+                let response_string = to_string(&response).unwrap() + "\n";
+                if write_stream.write_all(response_string.as_bytes()).await.is_err() {
+                    continue;
+                }
                 let mut writes_locked = write_streams.lock().await;
-                writes_locked.insert(address, write_stream);
-                tokio::spawn(listen_messages(reader, address, tokens.clone(), text_tx.clone(), command_tx.clone()));
+                writes_locked.insert(username.clone(), write_stream);
+                let db_locked = db.lock().await;
+                let hashed = hash_username(&username);
+                let query = &format!("INSERT OR IGNORE INTO user_hashes (username, hash) VALUES('{}', {});", username, hashed);
+                db_locked.execute(
+                    &query,
+                    ()).unwrap();
+                tokio::spawn(listen_messages(reader, tokens.clone(), text_tx.clone(), command_tx.clone()));
             }
         });
     }
@@ -143,11 +158,17 @@ impl Server {
             // While the text message channel is open, receive new messages
             while let Some(message) = message_rx.recv().await {
                 print!("<{}> {}", message.username, message.body);
+                let channel = message.channel.clone();
+                let in_dm_channel = is_dm(&channel);
                 let message = Message::Text(message);
-                let mut bad_addresses: Vec<std::net::SocketAddr> = Vec::new(); // Users that fail to communicate will be purged
+                let mut bad_users: Vec<String> = Vec::new(); // Users that fail to communicate will be purged
                 let mut streams_locked = write_streams.lock().await;
                 // Iterate through all users and send the received message
-                for (address, stream) in streams_locked.iter_mut() {
+                for (username, stream) in streams_locked.iter_mut() {
+                    // If the user is not in the dm channel, don't broadcast to them
+                    if in_dm_channel && !allowed_dm(&channel, &username) {
+                        continue;
+                    }
                     // If the message is valid JSON, were good. If it's cringe, don't bother sending it
                     let outgoing_message = match to_string(&message) {
                         Ok(data) => data,
@@ -160,22 +181,22 @@ impl Server {
                         Ok(_) => {},
                         Err(_) => {
                             let _res = stream.shutdown().await;
-                            bad_addresses.push(address.clone())
+                            bad_users.push(username.clone())
                         }
                     }
                 }
                 // Purge the cringe list
-                streams_locked.retain(|addr, _stream| !bad_addresses.contains(&addr));
+                streams_locked.retain(|addr, _stream| !bad_users.contains(&addr));
             }
         });
     }
 
     /// Start a task to parse commands and send them off to be handled
-    fn begin_parse_commands(&self, mut command_rx: mpsc::Receiver<(CommandMessage, SocketAddr)>) {
+    fn begin_parse_commands(&self, mut command_rx: mpsc::Receiver<CommandMessage>) {
         let write_streams = self.write_streams.clone();
         let db = self.database.clone();
         tokio::spawn(async move {
-            while let Some((cmd, address)) = command_rx.recv().await {
+            while let Some(cmd) = command_rx.recv().await {
                 match cmd.command_type.as_str() {
                     // User requests message history
                     "history" => {
@@ -186,7 +207,7 @@ impl Server {
                             Err(_) => continue // We will not crashing the thread over a malformed command thank you very much
                         };
                         // Fetch and send the history
-                        match retrieve_history(address, db.clone(), channel, count, write_streams.clone()).await {
+                        match retrieve_history(&cmd.username, db.clone(), channel, count, write_streams.clone()).await {
                             Ok(_) => {},
                             Err(error) => eprintln!("{:?}", error)
                         }
@@ -210,10 +231,9 @@ async fn main() {
 /// Listen for incoming messages on a stream and send them off to the right process
 async fn listen_messages(
     mut reader: BufReader<tcp::OwnedReadHalf>,
-    address: SocketAddr,
     tokens: Arc<Mutex<HashMap<String, String>>>,
     text_tx: mpsc::Sender<TextMessage>,
-    command_tx: mpsc::Sender<(CommandMessage, SocketAddr)>,
+    command_tx: mpsc::Sender<CommandMessage>,
 ) {
     use shared::Message as m;
     let mut buffer = String::new();
@@ -236,7 +256,7 @@ async fn listen_messages(
         // Check the type of the message and send the contents to the right process
         match message {
             m::Text(content) => {text_tx.send(content).await.unwrap();}, // Send off to save in database and broadcast
-            m::Command(content) => {command_tx.send((content, address)).await.unwrap();},
+            m::Command(content) => {command_tx.send(content).await.unwrap();},
             _ => {}
         };
     }
@@ -250,12 +270,30 @@ async fn process_and_save(
 ) -> rusqlite::Result<()> {
     // Await messages to process and send
     while let Some(mut msg) = text_rx_raw.recv().await {
+        // Check if the channel is a DM channel for special treatments
+        if is_dm(&msg.channel) && !channel_exists(&msg.channel, db.clone()).await? {
+            // If the channel name is invalid, ignore the message
+            if !is_valid_dm(&msg.channel, db.clone()).await? {
+                continue;
+            }
+            // Else ensure the DM channel exists
+            let db_locked = db.lock().await;
+            db_locked.execute(&format!("CREATE TABLE IF NOT EXISTS {channel}
+                (
+                    id INTEGER PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+                    embed_pointer INTEGER,
+                    embed_type TEXT
+                );", channel = msg.channel),())?;
+        }
+
         // First process the message by adding server-supplied data
         msg.timestamp = match std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH) {
             Ok(time) => time.as_secs(),
             Err(_) => 0,
         };
-        
         
         // Then write it to the database
         // This scope is important in case of any awaits afterwards
@@ -287,12 +325,17 @@ async fn process_and_save(
 
 /// Retrieve a specified number of messages from the history database and send them to the user who requested them
 async fn retrieve_history(
-    address: std::net::SocketAddr,
+    username: &str,
     db: Arc<Mutex<Connection>>,
     channel: String,
     count: usize,
-    streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>
+    streams: Arc<Mutex<HashMap<String, tcp::OwnedWriteHalf>>>
 ) -> rusqlite::Result<()> {
+    // If the user is not allowed in the DMs, deny accesss
+    if is_dm(&channel) && !allowed_dm(&channel, &username) {
+        println!("User {} tried to acces DM channel {} history without permission", username, channel);
+        return Ok(());
+    }
     // Get the messages from the database
     let messages = {
         let db_locked = db.lock().await;
@@ -317,7 +360,7 @@ async fn retrieve_history(
     };
     // Write the messages
     let mut streams_locked = streams.lock().await;
-    let stream = streams_locked.get_mut(&address).unwrap();
+    let stream = streams_locked.get_mut(username).unwrap();
     for message in messages {
         let serialized = to_string(&message).unwrap() + "\n";
         let _res = stream.write_all(&serialized.as_bytes()).await;
@@ -333,7 +376,7 @@ async fn authenticate(
     reader: &mut BufReader<tcp::OwnedReadHalf>,
     db: Arc<Mutex<Connection>>,
     session_tokens: Arc<Mutex<HashMap<String, String>>>
-) -> Result<Option<String>, String> {
+) -> Result<Option<Message>, String> {
     use shared::Message as m;
 
     // Receive the authentication message
@@ -405,7 +448,7 @@ async fn authenticate(
             auth_token: Some(token),
             password: None
         });
-        return Ok(Some(to_string(&response).map_err(|e| e.to_string())? + "\n"))
+        return Ok(Some(response))
     }
     Ok(None)
 }
@@ -429,4 +472,74 @@ async fn is_authentic(message: Message, tokens: Arc<Mutex<HashMap<String, String
         None => return false
     };
     return stored_token == message_token
+}
+
+
+// Checks whether a DM channel contains two valid users that have been on the server
+async fn is_valid_dm(channel: &str, db: Arc<Mutex<Connection>>) -> rusqlite::Result<bool>{
+    // Get a vec of hashes from the channel name
+    let mut users = Vec::new();
+    let channel = channel.replace("DM_", "");
+    let users_iter = channel.split("_");
+    for user in users_iter {
+        match user.parse() {
+            Ok(parsed) => users.push(parsed),
+            Err(_) => return Ok(false)
+        }
+    }
+
+    // Ensure that the channel name is sorted
+    let mut sorted = users.clone();
+    sorted.sort();
+    if users != sorted {
+        return Ok(false)
+    }
+
+    // Get all hashes from the database
+    let db_locked = db.lock().await;
+    let mut statement = db_locked.prepare("SELECT hash FROM user_hashes;")?;
+    let response = statement.query_map((), |row| {
+        row.get::<usize, i64>(0)
+    })?;
+    let mut hashes = Vec::new();
+    for row in response {
+        let row = row.unwrap();
+        hashes.push(row);
+    }
+
+    // Determine whether all hashes in the channel name are users of the server
+    let all_hashes_valid = users.into_iter()
+        .map(|user| hashes.contains(&user))
+        .fold(true, |acc, value| acc && value);
+
+    Ok(all_hashes_valid)
+}
+
+// Returns whether or not a channel name is a DM channel
+fn is_dm(channel: &str) -> bool {
+    channel.starts_with("DM_")
+}
+
+// Returns whether or not a user is allowed in a DM channel
+fn allowed_dm(channel: &str, username: &str) -> bool {
+    let hashed = hash_username(username);
+    channel.contains(&hashed.to_string())
+}
+
+fn hash_username(username: &str) -> i64 {
+    let mut hasher = DefaultHasher::new();
+    username.hash(&mut hasher);
+    (hasher.finish() >> 1) as i64
+}
+
+async fn channel_exists(channel: &str, db: Arc<Mutex<Connection>>) -> rusqlite::Result<bool> {
+    let db_locked = db.lock().await;
+    match db_locked.query_row_and_then(
+        &format!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{}';", channel),
+        (),
+        |row| row.get::<usize, i64>(0)
+    ).optional()? {
+        Some(_) => Ok(true),
+        None => Ok(false)
+    }
 }
