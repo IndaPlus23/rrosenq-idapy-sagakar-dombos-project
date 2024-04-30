@@ -5,7 +5,8 @@ pub enum Message {
     Text(TextMessage),
     File(FileMessage),
     Command(CommandMessage),
-    Auth(AuthMessage)
+    Auth(AuthMessage),
+    Info(InfoMessage),
 }
 
 impl Message {
@@ -15,7 +16,8 @@ impl Message {
             m::Text(inner) => inner.username.clone(),
             m::File(inner) => inner.username.clone(),
             m::Command(inner) => inner.username.clone(),
-            m::Auth(inner) => inner.username.clone()
+            m::Auth(inner) => inner.username.clone(), 
+            m::Info(_) => "Server".to_string()
         }
     }
 
@@ -25,7 +27,8 @@ impl Message {
             m::Text(inner) => Some(inner.auth_token.clone()),
             m::File(inner) => Some(inner.auth_token.clone()),
             m::Command(inner) => Some(inner.auth_token.clone()),
-            m::Auth(inner) => inner.auth_token.clone()
+            m::Auth(inner) => inner.auth_token.clone(),
+            m::Info(_) => None
         }
     }
 }
@@ -63,4 +66,10 @@ pub struct AuthMessage {
     pub username: String,
     pub auth_token: Option<String>,
     pub password: Option<String>
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct InfoMessage {
+    pub header: String,
+    pub data: String
 }
