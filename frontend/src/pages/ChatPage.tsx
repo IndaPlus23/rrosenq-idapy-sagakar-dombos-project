@@ -11,6 +11,7 @@ interface ChatPageProps {
 }
 
 function ChatPage({ messages, sendMessage, messageDisplayRef }: ChatPageProps) {
+
     return (
         <div className='Chat'>
             <div className='ChannelMenu'>
