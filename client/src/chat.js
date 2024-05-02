@@ -8,9 +8,6 @@ function sendMessage(body, who) {
 
 // Define an async function to use await
 async function init() {
-    // Call the Command!
-    // You will see "Welcome from Tauri" replaced
-    // by "Hello, World!"!
     invoke('greet', { name: 'World' })
         // `invoke` returns a Promise
         .then((response) => {

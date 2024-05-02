@@ -2,10 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use shared::{Command, File, Message};
+use shared::{AuthMessage, Message, TextMessage};
 use std::time::SystemTime;
 use tauri::Manager;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
@@ -15,6 +15,8 @@ use tracing::info;
 struct TauriState {
     async_sender: mpsc::Sender<String>,
     writehalf: Mutex<Option<OwnedWriteHalf>>,
+    username: Mutex<Option<String>>,
+    auth_token: Mutex<Option<String>>,
 }
 
 fn main() {
@@ -26,6 +28,8 @@ fn main() {
         .manage(TauriState {
             async_sender: async_proc_input_tx,
             writehalf: None.into(),
+            username: None.into(),
+            auth_token: None.into(),
         })
         .setup(move |app| {
             let app_handle = app.handle();
@@ -76,24 +80,33 @@ async fn send_message(
 ) -> Result<(), String> {
     info!(?message, "send_message");
 
-    let msg_struct = Message {
-        username: String::from("Hello"),
-        auth_token: String::from("hello"),
-        body: String::from(message.clone()),
-        embed_pointer: None,
-        embed_type: None,
-        message_id: None,
-        timestamp: SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
+    let lock_u = state.username.lock();
+    let username = match &mut *lock_u.await {
+        Some(usr) => usr.clone(),
+        _ => {return Err("unable to fetch username: mutex poisoned".to_string());}
     };
+    let lock_a = state.auth_token.lock();
+    let auth_token = match &mut *lock_a.await {
+        Some(token) => token.clone(),
+        _ => {return Err("unable to fetch auth-token: mutex poisoned".to_string());}
+    };
+
+    let msg_struct = Message::Text(TextMessage { 
+        username: username, 
+        auth_token: auth_token, 
+        body: message, 
+        channel: String::from("general"), 
+        embed_pointer: None, 
+        embed_type: None, 
+        message_id: None, 
+        timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+    });
     let formated_msg_struct = serde_json::to_string(&msg_struct).unwrap();
     let finalized_msg: String = format!("{}\n", formated_msg_struct);
 
     let byte_slice: &[u8] = finalized_msg.as_bytes();
-    let lock = state.writehalf.lock();
 
+    let lock = state.writehalf.lock();
     match &mut *lock.await {
         Some(write_half) => {
             let resulting = write_half.try_write(byte_slice).unwrap();
@@ -108,7 +121,7 @@ async fn send_message(
 }
 
 #[tauri::command]
-async fn connect_server(ip: &str, state: tauri::State<'_, TauriState>) -> Result<(), String> {
+async fn connect_server(ip: &str, username: String, password: String, state: tauri::State<'_, TauriState>) -> Result<(), String> {
     let stream = match TcpStream::connect(ip).await {
         Ok(stream) => stream,
         Err(e) => {
@@ -116,9 +129,52 @@ async fn connect_server(ip: &str, state: tauri::State<'_, TauriState>) -> Result
             return Err(e.to_string());
         }
     };
-    println!("connected to {}", ip);
+    println!("connected to {}, attempting authentication", ip);
 
-    let (connection_read, connection_write) = stream.into_split();
+    let (mut connection_read, connection_write) = stream.into_split();
+
+    let auth_message = Message::Auth(AuthMessage {
+        username: username.clone(), 
+        auth_token: None, 
+        password: Some(password.clone()) 
+    });
+    let formated_msg_struct = serde_json::to_string(&auth_message).unwrap();
+    let finalized_msg = format!("{}\n", formated_msg_struct);
+
+    let byte_slice: &[u8] = finalized_msg.as_bytes();
+
+    match connection_write.try_write(byte_slice) {
+        Ok(r) => {println!("wrote {} bytes during auth, awaiting response", r)},
+        Err(e) => {return Err(e.to_string());}
+    }
+
+    let mut temp_buffer = vec![0u8; 1024];
+    let temp_read = connection_read.read(&mut temp_buffer).await.map_err(|e| e.to_string()).unwrap();
+
+    if let Ok(msg) = String::from_utf8(temp_buffer[..temp_read].to_vec()) {
+        println!("{}", msg);
+        let fixed: Result<shared::Message, _> = serde_json::from_str(&msg).map_err(|e| e.to_string());
+        match fixed {
+            Ok(auth_struct) => {
+                match auth_struct {
+                    Message::Auth(inner) => {
+                        if inner.auth_token == None {
+                            return Err("incorrect username or password".to_string());
+                        } else {
+                            *state.username.lock().await = Some(username.clone());
+                            *state.auth_token.lock().await = Some(inner.auth_token.unwrap().clone());
+                        }
+                    },
+                    _ => {
+                        return Err("auth message was not returned".to_string());
+                    }
+                }
+            },
+            _ => {
+                return Err("error deserializing auth message".to_string());
+            }
+        }
+    };
 
     *state.writehalf.lock().await = Some(connection_write);
 
@@ -149,11 +205,14 @@ async fn connection_handler(
             let fixed: Result<shared::Message, _> =
                 serde_json::from_str(&message).map_err(|e| e.to_string());
             match fixed {
-                Ok(msg) => {
-                    let _ = state.send(msg.body).await;
+                Ok(msg_struct) => {
+                    match msg_struct {
+                        Message::Text(msg) => state.send(msg.body).await.unwrap(),
+                        _ => (),
+                    }
                 }
                 Err(err) => {
-                    return Err(format!("Error deserializing message: {}", err));
+                    return Err(format!("error deserializing message: {}", err));
                 }
             }
         }
