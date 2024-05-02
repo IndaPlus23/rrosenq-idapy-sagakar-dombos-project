@@ -215,7 +215,7 @@ impl Server {
                     }
                     //User requests a list of channels
                     "channels" => {
-                        match retrive_channels(address, write_streams.clone(), &config).await {
+                        match retrive_channels(&cmd.username,write_streams.clone(), &config).await {
                             Ok(_) => {},
                             Err(error) => eprintln!("{:?}", error)
                         }
@@ -377,14 +377,14 @@ async fn retrieve_history(
 
 // Retrieve a list of the channels in the server
 async fn retrive_channels(
-    address: std::net::SocketAddr,
-    streams: Arc<Mutex<HashMap<std::net::SocketAddr, tcp::OwnedWriteHalf>>>,
+    username: &str,
+    streams: Arc<Mutex<HashMap<String, tcp::OwnedWriteHalf>>>,
     config: &Table
 ) -> Result<(), Box<dyn Error>> {
     let channels = config["channels"].as_array().ok_or("Invalid channel configuration")?;
 
     let mut streams_locked = streams.lock().await;
-    if let Some(stream) = streams_locked.get_mut(&address) {
+    if let Some(stream) = streams_locked.get_mut(username) {
         let channels = to_string(channels)?;
         let outgoing_msg = Message::Info(InfoMessage{
            header: "channels\n".to_owned(),
