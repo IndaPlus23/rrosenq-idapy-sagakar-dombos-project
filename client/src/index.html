@@ -10,9 +10,19 @@
   <body>
     <h1 id="header">Give IP</h1>
     <div>
-        <input type="text" id="ip-addr">
-        <button type="button" id="subm" onclick="handleConnection(document.getElementById('ip-addr').value); document.getElementById('ip-addr').value = ''">Submit</button>
+      <label for="ip-addr">IP:</label>
+      <input type="text" id="ip-addr">
+
+      <label for="username">Username:</label>
+      <input type="text" id="username">
+
+      <label for="password">Password:</label>
+      <input type="password" id="password">
+      
+      <button type="button" id="subm" onclick="handleConnection(document.getElementById('ip-addr').value, document.getElementById('username').value, document.getElementById('password').value)">Submit</button>
     </div>
     
   </body>
 </html>
+
+<!-- document.getElementById('ip-addr').value = '' -->
