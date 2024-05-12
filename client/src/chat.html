@@ -8,7 +8,11 @@
     <title>Document</title>
   </head>
   <body>
-    <h1 id="header">Welcome from Tauri!</h1>
+    <h1 id="header">Welcome to the chat!</h1>
+
+    <div>
+      <select id="channels"></select>
+    </div>
 
     <div id="messages">
         <div id="inner-messages">
@@ -16,7 +20,7 @@
     </div>
     <div>
         <input type="text" id="testtt">
-        <button type="button" id="subm" onclick="sendMessage(document.getElementById('testtt').value, 'You'); document.getElementById('testtt').value = ''">Submit</button>
+        <button type="button" id="subm" onclick="sendMessage(document.getElementById('testtt').value, 'general'); document.getElementById('testtt').value = ''">Submit</button>
     </div>
     
   </body>

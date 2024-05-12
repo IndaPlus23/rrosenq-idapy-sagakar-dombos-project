@@ -1,10 +1,12 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use shared::{AuthMessage, Message, TextMessage};
+use serde_json::from_str;
+use shared::{AuthMessage, CommandMessage, Message, TextMessage};
 use std::time::SystemTime;
+use std::vec;
 use tauri::Manager;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
@@ -12,18 +14,18 @@ use tracing::info;
 
 
 struct TauriState {
-    async_sender: mpsc::Sender<String>,
+    async_sender: mpsc::Sender<Message>,
     writehalf: Mutex<Option<OwnedWriteHalf>>,
     username: Mutex<Option<String>>,
     auth_token: Mutex<Option<String>>,
 }
 
 fn main() {
-    let (async_proc_input_tx, async_proc_input_rx) = mpsc::channel::<String>(1);
-    let (async_proc_output_tx, mut async_proc_output_rx) = mpsc::channel::<String>(1);
+    let (async_proc_input_tx, async_proc_input_rx) = mpsc::channel::<Message>(1);
+    let (async_proc_output_tx, mut async_proc_output_rx) = mpsc::channel::<Message>(1);
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![send_message, connect_server])
+        .invoke_handler(tauri::generate_handler![send_message, request_channels, request_history, connect_server])
         .manage(TauriState {
             async_sender: async_proc_input_tx,
             writehalf: None.into(),
@@ -41,7 +43,18 @@ fn main() {
 
             tauri::async_runtime::spawn(async move {
                 while let Some(output) = async_proc_output_rx.recv().await {
-                    recieve_message(output, &app_handle)
+                    match output {
+                        Message::Text(_) => {
+                            recieve_message(output, &app_handle);
+                        },
+                        Message::File(_) => todo!(),
+                        Message::Command(_) => todo!(),
+                        Message::Auth(_) => todo!(),
+                        Message::Info(inside) => {
+                            init_channels(from_str(&inside.data).unwrap(), &app_handle);
+                        },
+                    }
+                    
                 }
             });
 
@@ -52,8 +65,8 @@ fn main() {
 }
 
 async fn async_process_model(
-    mut input_rx: mpsc::Receiver<String>,
-    output_tx: mpsc::Sender<String>,
+    mut input_rx: mpsc::Receiver<Message>,
+    output_tx: mpsc::Sender<Message>,
 ) -> Result<(), String> {
     while let Some(input) = input_rx.recv().await {
         let output = input;
@@ -67,14 +80,20 @@ async fn async_process_model(
     return Err(String::from("error in async-handler"));
 }
 
-fn recieve_message<R: tauri::Runtime>(message: String, manager: &impl Manager<R>) {
+fn recieve_message<R: tauri::Runtime>(message: Message, manager: &impl Manager<R>) {
     info!(?message, "recieve_message");
     manager.emit_all("recieve_message", message).unwrap();
+}
+
+fn init_channels<R: tauri::Runtime>(channels: Vec<String>, manager: &impl Manager<R>) {
+    info!(?channels, "init_channels");
+    manager.emit_all("init_channels", channels).unwrap();
 }
 
 #[tauri::command]
 async fn send_message(
     message: String,
+    channel: String,
     state: tauri::State<'_, TauriState>,
 ) -> Result<(), String> {
     info!(?message, "send_message");
@@ -94,7 +113,7 @@ async fn send_message(
         username: username, 
         auth_token: auth_token, 
         body: message, 
-        channel: String::from("general"), 
+        channel, 
         embed_pointer: None, 
         embed_type: None, 
         message_id: None, 
@@ -102,7 +121,6 @@ async fn send_message(
     });
     let formated_msg_struct = serde_json::to_string(&msg_struct).unwrap();
     let finalized_msg: String = format!("{}\n", formated_msg_struct);
-
     let byte_slice: &[u8] = finalized_msg.as_bytes();
 
     let lock = state.writehalf.lock();
@@ -113,6 +131,80 @@ async fn send_message(
         }
         _ => {
             return Err(String::from("message unable to send: ownedwritehalf not initialised"));
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn request_channels(state: tauri::State<'_, TauriState>) -> Result<(), String> {
+    let lock_u = state.username.lock();
+    let username = match &mut *lock_u.await {
+        Some(usr) => usr.clone(),
+        _ => {return Err("unable to fetch username: mutex poisoned".to_string());}
+    };
+    let lock_a = state.auth_token.lock();
+    let auth_token = match &mut *lock_a.await {
+        Some(token) => token.clone(),
+        _ => {return Err("unable to fetch auth-token: mutex poisoned".to_string());}
+    };
+
+    let cmd_struct = Message::Command(CommandMessage {
+        username, 
+        auth_token, 
+        command_type: String::from("channels"), 
+        args: vec![] 
+    });
+    let formated_cmd_struct = serde_json::to_string(&cmd_struct).unwrap();
+    let finalized_cmd: String = format!("{}\n", formated_cmd_struct);
+    let byte_slice: &[u8] = finalized_cmd.as_bytes();
+
+    let lock = state.writehalf.lock();
+    match &mut *lock.await {
+        Some(write_half) => {
+            let _resulting = write_half.try_write(byte_slice).unwrap();
+            println!("sent cmd requesting channel");
+        }
+        _ => {
+            return Err(String::from("cmd unable to send: ownedwritehalf not initialised"));
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn request_history(channel: String, amount: String, state: tauri::State<'_, TauriState>) -> Result<(), String> {
+    let lock_u = state.username.lock();
+    let username = match &mut *lock_u.await {
+        Some(usr) => usr.clone(),
+        _ => {return Err("unable to fetch username: mutex poisoned".to_string());}
+    };
+    let lock_a = state.auth_token.lock();
+    let auth_token = match &mut *lock_a.await {
+        Some(token) => token.clone(),
+        _ => {return Err("unable to fetch auth-token: mutex poisoned".to_string());}
+    };
+
+    let cmd_struct = Message::Command(CommandMessage { 
+        username, 
+        auth_token, 
+        command_type: String::from("history"), 
+        args: vec![channel.clone(), amount]
+    });
+    let formated_cmd_struct = serde_json::to_string(&cmd_struct).unwrap();
+    let finalized_cmd: String = format!("{}\n", formated_cmd_struct);
+    let byte_slice: &[u8] = finalized_cmd.as_bytes();
+
+    let lock = state.writehalf.lock();
+    match &mut *lock.await {
+        Some(write_half) => {
+            let _resulting = write_half.try_write(byte_slice).unwrap();
+            println!("sent cmd requesting history for channel {}", channel);
+        }
+        _ => {
+            return Err(String::from("cmd unable to send: ownedwritehalf not initialised"));
         }
     }
 
@@ -178,42 +270,34 @@ async fn connect_server(ip: &str, username: String, password: String, state: tau
     *state.writehalf.lock().await = Some(connection_write);
 
     let state_clone = state.async_sender.clone();
-    tokio::spawn(connection_handler(connection_read, state_clone));
+    let read_buff = BufReader::new(connection_read);
+    tokio::spawn(connection_handler(read_buff, state_clone));
 
     return Ok(());
 }
 
 async fn connection_handler(
-    mut readhalf: OwnedReadHalf,
-    state: tauri::async_runtime::Sender<std::string::String>,
+    mut read_buf: BufReader<OwnedReadHalf>,
+    state: tauri::async_runtime::Sender<Message>,
 ) -> Result<(), String> {
-    let mut buffer = vec![0u8; 1024];
+    let mut buffer = String::new();
 
     loop {
-        let bytes_read = readhalf
-            .read(&mut buffer)
-            .await
-            .map_err(|e| e.to_string())
-            .unwrap();
+        buffer.clear();
 
-        if bytes_read == 0 {
-            return Err(String::from("connection ended"));
+        if read_buf.read_line(&mut buffer).await.is_err() {
+            return Err("end of stream".to_string());
         }
 
-        if let Ok(message) = String::from_utf8(buffer[..bytes_read].to_vec()) {
-            let fixed: Result<shared::Message, _> =
-                serde_json::from_str(&message).map_err(|e| e.to_string());
-            match fixed {
-                Ok(msg_struct) => {
-                    match msg_struct {
-                        Message::Text(msg) => state.send(msg.body).await.unwrap(),
-                        _ => (),
-                    }
-                }
-                Err(err) => {
-                    return Err(format!("error deserializing message: {}", err));
-                }
-            }
+        if buffer == "" {
+            return Err("end of stream".to_string());
         }
+
+        let message = match from_str::<Message>(&buffer) {
+            Ok(data) => data,
+            Err(_) => return Err("error deserializing message".to_string()),
+        };
+
+        state.send(message.clone()).await.unwrap();
     }
 }
