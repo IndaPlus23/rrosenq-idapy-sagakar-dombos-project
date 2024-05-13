@@ -1,7 +1,7 @@
 use base64ct::{Base64, Encoding};
 use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use shared::{AuthMessage, CommandMessage, InfoMessage, Message, TextMessage};
 use serde_json::{from_str, to_string};
 use sha2::{Sha256, Digest};
@@ -61,7 +61,8 @@ impl Server {
         let channels: &Vec<toml::Value> = config["channels"].as_array().ok_or("Invalid channel configuration")?;
         for channel in channels {
             let channel = channel.as_str().ok_or("Invalid channel name")?;
-            connection.execute(&format!("CREATE TABLE IF NOT EXISTS {channel}
+            let channel = hash_username(channel).to_string();
+            connection.execute(&format!("CREATE TABLE IF NOT EXISTS channel${channel}
                 (
                     id INTEGER PRIMARY KEY,
                     username TEXT NOT NULL,
@@ -142,10 +143,9 @@ impl Server {
                 writes_locked.insert(username.clone(), write_stream);
                 let db_locked = db.lock().await;
                 let hashed = hash_username(&username);
-                let query = &format!("INSERT OR IGNORE INTO user_hashes (username, hash) VALUES('{}', {});", username, hashed);
                 db_locked.execute(
-                    &query,
-                    ()).unwrap();
+                    "INSERT OR IGNORE INTO user_hashes (username, hash) VALUES(?1, ?2);",
+                    params![username, hashed.to_string()]).unwrap();
                 tokio::spawn(listen_messages(reader, tokens.clone(), text_tx.clone(), command_tx.clone()));
             }
         });
@@ -285,7 +285,8 @@ async fn process_and_save(
             }
             // Else ensure the DM channel exists
             let db_locked = db.lock().await;
-            db_locked.execute(&format!("CREATE TABLE IF NOT EXISTS {channel}
+            let channel = hash_username(&msg.channel).to_string();
+            db_locked.execute(&format!("CREATE TABLE IF NOT EXISTS channel${channel}
                 (
                     id INTEGER PRIMARY KEY,
                     username TEXT NOT NULL,
@@ -293,7 +294,7 @@ async fn process_and_save(
                     timestamp INTEGER NOT NULL,
                     embed_pointer INTEGER,
                     embed_type TEXT
-                );", channel = msg.channel),())?;
+                );"),())?;
         }
 
         // First process the message by adding server-supplied data
@@ -306,12 +307,12 @@ async fn process_and_save(
         // This scope is important in case of any awaits afterwards
         {
             // Write
-            let query = format!("
-            INSERT INTO {channel} (username, body, timestamp)
-            VALUES('{username}', '{body}', '{timestamp}');
-            ", username = msg.username, body = msg.body, timestamp = msg.timestamp, channel = msg.channel);
+            let channel = hash_username(&msg.channel);
             let db_locked = db.lock().await;
-            match db_locked.execute(&query, ()) {
+            match db_locked.execute(
+                &format!("INSERT INTO channel${channel} (username, body, timestamp) VALUES(?1, ?2, ?3);"),
+                params![msg.username, msg.body, msg.timestamp]
+            ) {
                 Ok(_) => {},
                 Err(_) => {
                     eprintln!("User {} attempted to access invalid channel {}, discarding...", msg.username, msg.channel);
@@ -321,6 +322,7 @@ async fn process_and_save(
 
             // Retrieve id
             msg.message_id = Some(db_locked.last_insert_rowid() as u32);
+            msg.auth_token = "".to_owned();
         }
 
         // When we know the write is successful, send the processed message to be broadcast
@@ -346,7 +348,8 @@ async fn retrieve_history(
     // Get the messages from the database
     let messages = {
         let db_locked = db.lock().await;
-        let mut statement = db_locked.prepare(&format!("SELECT * FROM {channel} ORDER BY id DESC LIMIT {count};"))?;
+        let hashed_channel = hash_username(&channel);
+        let mut statement = db_locked.prepare(&format!("SELECT * FROM channel${hashed_channel} ORDER BY id DESC LIMIT {count};"))?;
         let mut msgs = statement.query_map((), |row| {
             // The query_map *has* to return an iterator of rusql::Result
             Ok(Message::Text(TextMessage {
@@ -404,16 +407,16 @@ async fn authenticate(
     reader: &mut BufReader<tcp::OwnedReadHalf>,
     db: Arc<Mutex<Connection>>,
     session_tokens: Arc<Mutex<HashMap<String, String>>>
-) -> Result<Option<Message>, String> {
+) -> Result<Option<Message>, Box<dyn Error>> {
     use shared::Message as m;
 
     // Receive the authentication message
     let mut buf = String::new();
     reader.read_line(&mut buf).await.map_err(|e| e.to_string())?;
-    let auth_msg = from_str::<Message>(&buf).map_err(|e| e.to_string())?;
+    let auth_msg = from_str::<Message>(&buf)?;
     let auth_msg = match auth_msg {
         m::Auth(inner) => inner,
-        _ => return Err("Did not receive authentication message".to_owned())
+        _ => Err("Did not receive authentication message".to_owned())?
     };
 
     // Determine if the authentication was successful
@@ -421,21 +424,19 @@ async fn authenticate(
         // Get or generate the salt
         let db_locked = db.lock().await;
         let mut statement = db_locked
-            .prepare(&format!("SELECT salt FROM salts WHERE username='{}';",auth_msg.username))
-            .map_err(|e| e.to_string())?;
+            .prepare("SELECT salt FROM salts WHERE username=?1;")?;
         let salt_option = statement
-            .query_row((), |row| row.get::<usize, String>(0))
-            .optional()
-            .map_err(|e| e.to_string())?;
+            .query_row([&auth_msg.username], |row| row.get::<usize, String>(0))
+            .optional()?;
         let salt = match salt_option {
             Some(salt) => salt,
             None => {
                 // If there is no salt, generate one and insert it into the database
                 let salt = rand_string(50);
                 db_locked.execute(
-                    &format!("INSERT INTO salts (username, salt) VALUES('{}', '{}');", auth_msg.username, salt),
-                    ()
-                ).map_err(|e| e.to_string())?;
+                    "INSERT INTO salts (username, salt) VALUES(?1, ?2);",
+                    params![auth_msg.username, salt]
+                )?;
                 salt
             }
         };
@@ -448,19 +449,17 @@ async fn authenticate(
 
         // Check or update the hashed password against the database
         let mut statement = db_locked
-            .prepare(&format!("SELECT hash FROM hashes WHERE username = '{}';", auth_msg.username))
-            .map_err(|e| e.to_string())?;
+            .prepare("SELECT hash FROM hashes WHERE username = ?1;")?;
         let hash_option = statement
-            .query_row((), |row| row.get::<usize, String>(0))
-            .optional()
-            .map_err(|e| e.to_string())?;
+            .query_row([&auth_msg.username], |row| row.get::<usize, String>(0))
+            .optional()?;
         match hash_option {
             Some(hash) => hash == hashed_pass,
             None => {
                 db_locked.execute(
-                    &format!("INSERT INTO hashes (username, hash) VALUES('{}', '{}');", auth_msg.username, hashed_pass),
-                    ()
-                ).map_err(|e| e.to_string())?;
+                    "INSERT INTO hashes (username, hash) VALUES(?1, ?2);",
+                    params![auth_msg.username, hashed_pass]
+                )?;
                 true
             }
         }
@@ -563,7 +562,7 @@ fn hash_username(username: &str) -> i64 {
 async fn channel_exists(channel: &str, db: Arc<Mutex<Connection>>) -> rusqlite::Result<bool> {
     let db_locked = db.lock().await;
     match db_locked.query_row_and_then(
-        &format!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{}';", channel),
+        &format!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='channel${}';", channel),
         (),
         |row| row.get::<usize, i64>(0)
     ).optional()? {
