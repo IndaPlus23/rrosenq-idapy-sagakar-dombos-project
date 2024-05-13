@@ -8,15 +8,20 @@
     <title>Document</title>
   </head>
   <body>
-    <h1 id="header">Welcome from Tauri!</h1>
+    <h1 id="header">Welcome to the chat!</h1>
 
-    <div id="messages">
-        <div id="inner-messages">
-        </div>
-    </div>
     <div>
-        <input type="text" id="testtt">
-        <button type="button" id="subm" onclick="sendMessage(document.getElementById('testtt').value, 'You'); document.getElementById('testtt').value = ''">Submit</button>
+      <select id="channels" onchange="channelChange()">
+        <option hidden disabled selected value> -- select a channel -- </option>
+      </select>
+    </div>
+
+    <div id="all-channel-boxes">
+    </div>
+
+    <div id="message-field">
+        <input type="text" id="text-message-field">
+        <button type="button" id="subm" onclick="sendMessage(document.getElementById('text-message-field').value); document.getElementById('text-message-field').value = ''">Submit</button>
     </div>
     
   </body>
