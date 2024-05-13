@@ -1,4 +1,4 @@
-#messages {
+.message-box {
   width: 40em;
   height: 20em;
   overflow-y: scroll;
@@ -7,11 +7,11 @@
   border: 2px solid black;
 }
 
-#inner-messages {
+.inner-channel {
   overflow-anchor: none;
 }
 
-#testtt {
+#text-message-field {
   width: 50em;
 }
 

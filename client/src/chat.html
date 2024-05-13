@@ -11,16 +11,17 @@
     <h1 id="header">Welcome to the chat!</h1>
 
     <div>
-      <select id="channels"></select>
+      <select id="channels" onchange="channelChange()">
+        <option hidden disabled selected value> -- select a channel -- </option>
+      </select>
     </div>
 
-    <div id="messages">
-        <div id="inner-messages">
-        </div>
+    <div id="all-channel-boxes">
     </div>
-    <div>
-        <input type="text" id="testtt">
-        <button type="button" id="subm" onclick="sendMessage(document.getElementById('testtt').value, 'general'); document.getElementById('testtt').value = ''">Submit</button>
+
+    <div id="message-field">
+        <input type="text" id="text-message-field">
+        <button type="button" id="subm" onclick="sendMessage(document.getElementById('text-message-field').value); document.getElementById('text-message-field').value = ''">Submit</button>
     </div>
     
   </body>

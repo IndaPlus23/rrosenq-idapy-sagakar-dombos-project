@@ -243,7 +243,6 @@ async fn connect_server(ip: &str, username: String, password: String, state: tau
     let temp_read = connection_read.read(&mut temp_buffer).await.map_err(|e| e.to_string()).unwrap();
 
     if let Ok(msg) = String::from_utf8(temp_buffer[..temp_read].to_vec()) {
-        println!("{}", msg);
         let fixed: Result<shared::Message, _> = serde_json::from_str(&msg).map_err(|e| e.to_string());
         match fixed {
             Ok(auth_struct) => {
