@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useRef } from 'react';
 import './App.css';
 import Navbar from './components/Navbar';
 import Sidebar from "./components/Sidebar";
@@ -11,18 +11,7 @@ import ServerPage from './pages/ServerPage';
 
 function App() {
 
-  const [messages, setMessages] = useState<string[]>([]);
   const messageDisplayRef = useRef<HTMLDivElement>(null);
-  
-  const sendMessage = (message: string) => {
-    setMessages([...messages, message]);
-  };
-
-  useEffect(() => {
-    if (messageDisplayRef.current) {
-      messageDisplayRef.current.scrollTop = messageDisplayRef.current.scrollHeight;
-    }
-  }, [messages])
 
   return (
     <div className='App'>
@@ -42,16 +31,11 @@ function App() {
             <Route path="/chat" element= {
               <div className='ChatPage'>
                 <ChatPage
-                  messages={messages}
-                  sendMessage={sendMessage}
-                  messageDisplayRef={messageDisplayRef}
-                />
+                  messageDisplayRef={messageDisplayRef}/>
               </div> } />
               <Route path="/dm" element= {
               <div className='DMPage'>
                 <DMPage
-                  messages={messages}
-                  sendMessage={sendMessage}
                   messageDisplayRef={messageDisplayRef}
                 />
               </div> } />
