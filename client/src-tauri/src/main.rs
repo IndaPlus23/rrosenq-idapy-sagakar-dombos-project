@@ -47,12 +47,10 @@ fn main() {
                         Message::Text(_) => {
                             recieve_message(output, &app_handle);
                         },
-                        Message::File(_) => todo!(),
-                        Message::Command(_) => todo!(),
-                        Message::Auth(_) => todo!(),
                         Message::Info(inside) => {
                             init_channels(from_str(&inside.data).unwrap(), &app_handle);
                         },
+                        _ => (),
                     }
                     
                 }
