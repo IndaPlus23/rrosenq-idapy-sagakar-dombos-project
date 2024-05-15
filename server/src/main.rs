@@ -74,9 +74,8 @@ impl Server {
         }
 
         // Create a table of server users (usernames that have logged in at least once)
-        connection.execute("CREATE TABLE IF NOT EXISTS user_hashes (
-            username TEXT PRIMARY KEY,
-            hash INTEGER UNIQUE
+        connection.execute("CREATE TABLE IF NOT EXISTS unique_users (
+            username TEXT PRIMARY KEY
         );", ())?;
 
         let database = Arc::new(Mutex::new(connection));
@@ -142,10 +141,9 @@ impl Server {
                 let mut writes_locked = write_streams.lock().await;
                 writes_locked.insert(username.clone(), write_stream);
                 let db_locked = db.lock().await;
-                let hashed = hash_username(&username);
                 db_locked.execute(
-                    "INSERT OR IGNORE INTO user_hashes (username, hash) VALUES(?1, ?2);",
-                    params![username, hashed.to_string()]).unwrap();
+                    "INSERT OR IGNORE INTO unique_users (username) VALUES(?1);",
+                    [username]).unwrap();
                 tokio::spawn(listen_messages(reader, tokens.clone(), text_tx.clone(), command_tx.clone()));
             }
         });
@@ -212,14 +210,20 @@ impl Server {
                             Ok(_) => {},
                             Err(error) => eprintln!("{:?}", error)
                         }
-                    }
+                    },
                     //User requests a list of channels
                     "channels" => {
                         match retrive_channels(&cmd.username,write_streams.clone(), &config).await {
                             Ok(_) => {},
                             Err(error) => eprintln!("{:?}", error)
                         }
-                    }
+                    },
+                    "users" => {
+                        match retrieve_users(&cmd.username, write_streams.clone(), db.clone()).await {
+                            Ok(_) => {},
+                            Err(error) => eprintln!("{:?}", error)
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -295,6 +299,7 @@ async fn process_and_save(
                     embed_pointer INTEGER,
                     embed_type TEXT
                 );"),())?;
+            println!("Created DM channel {}", msg.channel);
         }
 
         // First process the message by adding server-supplied data
@@ -340,6 +345,9 @@ async fn retrieve_history(
     count: usize,
     streams: Arc<Mutex<HashMap<String, tcp::OwnedWriteHalf>>>
 ) -> rusqlite::Result<()> {
+    if !channel_exists(&channel, db.clone()).await? {
+        return Ok(());
+    }
     // If the user is not allowed in the DMs, deny accesss
     if is_dm(&channel) && !allowed_dm(&channel, &username) {
         println!("User {} tried to acces DM channel {} history without permission", username, channel);
@@ -390,12 +398,48 @@ async fn retrive_channels(
     if let Some(stream) = streams_locked.get_mut(username) {
         let channels = to_string(channels)?;
         let outgoing_msg = Message::Info(InfoMessage{
-           header: "channels\n".to_owned(),
+           header: "channels".to_owned(),
            data: channels 
         });
         let serialized = to_string(&outgoing_msg)? + "\n";
         stream.write_all(serialized.as_bytes()).await?;
     }
+    Ok(())
+}
+
+async fn retrieve_users(
+    username: &str,
+    streams: Arc<Mutex<HashMap<String, tcp::OwnedWriteHalf>>>,
+    db: Arc<Mutex<Connection>>
+) -> Result<(), Box<dyn Error>> {
+    
+    // Get all users from the database
+    let all_users = {
+        let db_locked = db.lock().await;
+        let mut statement = db_locked.prepare("SELECT username FROM unique_users;")?;
+        let response = statement.query_map((), |row| {
+            row.get::<usize, String>(0)
+        })?;
+        let mut all_users = Vec::new();
+        for row in response {
+            let row = row?;
+            all_users.push(row);
+        }
+        all_users.retain(|user| user != username);
+        all_users.sort();
+        all_users
+    };
+    
+
+    let response = to_string(&Message::Info(InfoMessage {
+        header: "users".to_owned(),
+        data: to_string(&all_users)?
+    }))? + "\n";
+    let mut streams_locked = streams.lock().await;
+    if let Some(stream) = streams_locked.get_mut(username) {
+        stream.write_all(response.as_bytes()).await?;
+    }
+
     Ok(())
 }
 
@@ -504,16 +548,11 @@ async fn is_authentic(message: Message, tokens: Arc<Mutex<HashMap<String, String
 
 // Checks whether a DM channel contains two valid users that have been on the server
 async fn is_valid_dm(channel: &str, db: Arc<Mutex<Connection>>) -> rusqlite::Result<bool>{
-    // Get a vec of hashes from the channel name
-    let mut users = Vec::new();
     let channel = channel.replace("DM_", "");
-    let users_iter = channel.split("_");
-    for user in users_iter {
-        match user.parse() {
-            Ok(parsed) => users.push(parsed),
-            Err(_) => return Ok(false)
-        }
-    }
+    let users = channel
+        .split("_")
+        .map(|user| user.to_owned())
+        .collect::<Vec<String>>();
 
     // Ensure that the channel name is sorted
     let mut sorted = users.clone();
@@ -522,24 +561,24 @@ async fn is_valid_dm(channel: &str, db: Arc<Mutex<Connection>>) -> rusqlite::Res
         return Ok(false)
     }
 
-    // Get all hashes from the database
+    // Get all users from the database
     let db_locked = db.lock().await;
-    let mut statement = db_locked.prepare("SELECT hash FROM user_hashes;")?;
+    let mut statement = db_locked.prepare("SELECT username FROM unique_users;")?;
     let response = statement.query_map((), |row| {
-        row.get::<usize, i64>(0)
+        row.get::<usize, String>(0)
     })?;
-    let mut hashes = Vec::new();
+    let mut all_users = Vec::new();
     for row in response {
-        let row = row.unwrap();
-        hashes.push(row);
+        let row = row?;
+        all_users.push(row);
     }
 
-    // Determine whether all hashes in the channel name are users of the server
-    let all_hashes_valid = users.into_iter()
-        .map(|user| hashes.contains(&user))
+    // Determine whether all users in the channel name are users of the server
+    let users_are_members = users.into_iter()
+        .map(|user| all_users.contains(&user))
         .fold(true, |acc, value| acc && value);
 
-    Ok(all_hashes_valid)
+    Ok(users_are_members)
 }
 
 // Returns whether or not a channel name is a DM channel
@@ -549,8 +588,7 @@ fn is_dm(channel: &str) -> bool {
 
 // Returns whether or not a user is allowed in a DM channel
 fn allowed_dm(channel: &str, username: &str) -> bool {
-    let hashed = hash_username(username);
-    channel.contains(&hashed.to_string())
+    channel.contains(&format!("_{username}"))
 }
 
 fn hash_username(username: &str) -> i64 {
@@ -560,12 +598,14 @@ fn hash_username(username: &str) -> i64 {
 }
 
 async fn channel_exists(channel: &str, db: Arc<Mutex<Connection>>) -> rusqlite::Result<bool> {
+    let channel_hashed = hash_username(channel).to_string();
     let db_locked = db.lock().await;
     match db_locked.query_row_and_then(
-        &format!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='channel${}';", channel),
+        &format!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='channel${}';", channel_hashed),
         (),
         |row| row.get::<usize, i64>(0)
     ).optional()? {
+        Some(0) =>  Ok(false),
         Some(_) => Ok(true),
         None => Ok(false)
     }
