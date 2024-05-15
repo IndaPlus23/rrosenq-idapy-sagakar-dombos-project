@@ -1,5 +1,3 @@
-
-
 function ProfilePage() {
   return (
     <div className="ProfilePage">
