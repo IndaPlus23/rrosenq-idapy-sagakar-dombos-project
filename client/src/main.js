@@ -15,5 +15,6 @@ function connectServer(ip, user, pass) {
 }
 
 function handleConnection(ip, user, pass) {
+    window.localStorage.setItem("username", user);
     connectServer(ip, user, pass).then(()=>{window.location.href="/chat.html"}).catch(e=>{console.error(e); message(e, { title: 'Tauri', type: 'error' })});
 }

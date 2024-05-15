@@ -9,20 +9,33 @@
   </head>
   <body>
     <h1 id="header">Welcome to the chat!</h1>
-
     <div>
-      <select id="channels" onchange="channelChange()">
-        <option hidden disabled selected value> -- select a channel -- </option>
-      </select>
+      <button onclick="setTab('channels')">Channels</button>
+      <button onclick="setTab('dms')">Direct messages</button>
+    </div>
+    <div id="channels-tab">
+      <div>
+        <select id="channels" onchange="channelChange()">
+          <option hidden disabled selected value> -- select a channel -- </option>
+        </select>
+      </div>
+
+      <div id="all-channel-boxes"></div>
     </div>
 
-    <div id="all-channel-boxes">
+    <div id="dms-tab" style="display: none;">
+      <div>
+        <select id="dms" onchange="dmChange()">
+          <option hidden disabled selected value> -- select a user -- </option>
+        </select>
+      </div>
+      <div id="all-dm-boxes"></div>
     </div>
 
     <div id="message-field">
-        <input type="text" id="text-message-field">
-        <button type="button" id="subm" onclick="sendMessage(document.getElementById('text-message-field').value); document.getElementById('text-message-field').value = ''">Submit</button>
+      <input type="text" id="text-message-field">
+      <button type="button" id="subm" onclick="sendMessage(document.getElementById('text-message-field').value); document.getElementById('text-message-field').value = ''">Submit</button>
     </div>
-    
+
   </body>
 </html>

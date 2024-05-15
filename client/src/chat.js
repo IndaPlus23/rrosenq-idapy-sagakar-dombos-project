@@ -6,8 +6,14 @@ const { appWindow } = window.__TAURI__.window;
 
 function sendMessage(body) {
     const channelList = document.getElementById("channels");
-
-    invoke('send_message', { message: body, channel: channelList.options[channelList.selectedIndex].value })
+    const dmList = document.getElementById("dms")
+    if (window.messageMode == "public") {
+        invoke('send_message', { message: body, channel: channelList.options[channelList.selectedIndex].value, visibility: 'public' })
+    }
+    else {
+        invoke('send_message', {message: body, target: dmList.options[dmList.selectedIndex].value, visibility: 'dm'})
+    }
+    
 }
 
 function channelChange() {
@@ -24,6 +30,32 @@ function channelChange() {
     activeChannel.scrollTop = activeChannel.scrollHeight;
 }
 
+function dmChange() {
+    const dmHolder = document.getElementById("all-dm-boxes");
+    const dmList = document.getElementById("dms");
+
+    const channels = dmHolder.getElementsByClassName("message-box");
+    for (const channelBox of channels) {
+        channelBox.style.display = "none";
+    };
+
+    const activeDm = document.getElementById("dm-" + dmList.options[dmList.selectedIndex].value);
+    activeDm.style.display = "block";
+    activeDm.scrollTop = activeDm.scrollHeight;
+}
+
+function setTab(tab) {
+    const channelTab = document.getElementById("channels-tab");
+    const dmTab = document.getElementById("dms-tab");
+    let channelsActive = tab == "channels"
+    let activeTab = channelsActive ? channelTab : dmTab;
+    let inactiveTab = channelsActive ? dmTab : channelTab;
+    window.messageMode = channelsActive ? "public" : "dm";
+
+    activeTab.style.display = "block";
+    inactiveTab.style.display = "none";
+}
+
 // Define an async function to use await
 async function init() {
     // invoke('greet', { name: 'World' })
@@ -34,8 +66,13 @@ async function init() {
 
     await listen('recieve_message', (event) => {
         let input = event.payload["Text"];
+        let is_dm = input.channel.startsWith('DM_');
+        let username = window.localStorage.getItem("username");
+        let dm_name = input.channel.replace("DM_", "").replace(username, "").replace("_", "");
+        let id = is_dm ? "dm-" + dm_name : "channel-" + input.channel;
+        console.log(id);
 
-        const scrollElem = document.getElementById("channel-" + input.channel);
+        const scrollElem = document.getElementById(id);
         const chatElem = scrollElem.getElementsByClassName("inner-channel")[0];
 
         var para = document.createElement("p");
@@ -65,11 +102,36 @@ async function init() {
             channelBoxInside.appendChild(innerChannel);
             channelBox.appendChild(channelBoxInside);
 
-            invoke('request_history', { channel: element, amount: '50' });
+            invoke('request_history', { channel: element, amount: '50', visibility: 'public' });
+        }
+    });
+
+    await listen('init_users', (event) => {
+        const userOptionList = document.getElementById("dms");
+        const dmBox = document.getElementById("all-dm-boxes");
+        for (const username of event.payload) {
+
+            var userOption = document.createElement("option");
+            userOption.innerHTML = username;
+            userOption.value = username;
+            userOptionList.appendChild(userOption);
+            
+            var dmBoxInside = document.createElement("div");
+            var innerChannel = document.createElement("div")
+            dmBoxInside.className = "message-box"
+            dmBoxInside.id = "dm-" + username;
+            dmBoxInside.style.display = "none";
+            innerChannel.className = "inner-channel";
+            dmBoxInside.appendChild(innerChannel);
+            dmBox.appendChild(dmBoxInside);
+
+            invoke('request_history', { target: username, amount: '50', visibility: 'dm' });
         }
     });
 
     invoke('request_channels');
+    invoke('request_users');
+    window.messageMode = "public"
 }
 
 // Call the async function to start the initialization process

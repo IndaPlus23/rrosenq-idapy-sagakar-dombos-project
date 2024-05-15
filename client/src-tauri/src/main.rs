@@ -6,7 +6,7 @@ use shared::{AuthMessage, CommandMessage, Message, TextMessage};
 use std::time::SystemTime;
 use std::vec;
 use tauri::Manager;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
@@ -25,7 +25,13 @@ fn main() {
     let (async_proc_output_tx, mut async_proc_output_rx) = mpsc::channel::<Message>(1);
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![send_message, request_channels, request_history, connect_server])
+        .invoke_handler(tauri::generate_handler![
+            send_message,
+            request_channels,
+            request_users,
+            request_history,
+            connect_server
+            ])
         .manage(TauriState {
             async_sender: async_proc_input_tx,
             writehalf: None.into(),
@@ -47,10 +53,17 @@ fn main() {
                         Message::Text(_) => {
                             recieve_message(output, &app_handle);
                         },
-                        Message::Info(inside) => {
-                            init_channels(from_str(&inside.data).unwrap(), &app_handle);
+                        Message::File(_) => todo!(),
+                        Message::Command(_) => todo!(),
+                        Message::Auth(_) => todo!(),
+                        Message::Info(inner) => {
+                            match inner.header.as_str() {
+                                "channels" => init_channels(from_str(&inner.data).unwrap(), &app_handle),
+                                "users" => init_users(from_str(&inner.data).unwrap(), &app_handle),
+                                _ => {}
+                            }
+                            
                         },
-                        _ => (),
                     }
                     
                 }
@@ -88,10 +101,16 @@ fn init_channels<R: tauri::Runtime>(channels: Vec<String>, manager: &impl Manage
     manager.emit_all("init_channels", channels).unwrap();
 }
 
+fn init_users<R: tauri::Runtime>(users: Vec<String>, manager: &impl Manager<R>) {
+    info!(?users, "init_users");
+    manager.emit_all("init_users", users).unwrap();
+}
+
 #[tauri::command]
 async fn send_message(
     message: String,
-    channel: String,
+    mut target: String,
+    visibility: String,
     state: tauri::State<'_, TauriState>,
 ) -> Result<(), String> {
     info!(?message, "send_message");
@@ -101,6 +120,11 @@ async fn send_message(
         Some(usr) => usr.clone(),
         _ => {return Err("unable to fetch username: mutex poisoned".to_string());}
     };
+    if visibility == "dm" {
+        let mut users = vec![username.clone(), target.clone()];
+        users.sort();
+        target = format!("DM_{user1}_{user2}", user1 = users[0], user2 = users[1]);
+    }
     let lock_a = state.auth_token.lock();
     let auth_token = match &mut *lock_a.await {
         Some(token) => token.clone(),
@@ -111,7 +135,7 @@ async fn send_message(
         username: username, 
         auth_token: auth_token, 
         body: message, 
-        channel, 
+        channel: target, 
         embed_pointer: None, 
         embed_type: None, 
         message_id: None, 
@@ -173,7 +197,30 @@ async fn request_channels(state: tauri::State<'_, TauriState>) -> Result<(), Str
 }
 
 #[tauri::command]
-async fn request_history(channel: String, amount: String, state: tauri::State<'_, TauriState>) -> Result<(), String> {
+async fn request_users(state: tauri::State<'_, TauriState>) -> Result<(), String> {
+    let username = match &*state.username.lock().await {
+        Some(inner) => inner.clone(),
+        None => Err("Missing username")?
+    };
+    let auth_token = match &*state.auth_token.lock().await {
+        Some(inner) => inner.clone(),
+        None => Err("Missing auth token")?
+    };
+    let outgoing = serde_json::to_string(&Message::Command(CommandMessage {
+        username,
+        auth_token,
+        command_type: "users".to_owned(),
+        args: Vec::new()
+    })).map_err(|err| err.to_string())? + "\n";
+    match &mut *state.writehalf.lock().await {
+        Some(stream) => stream.write_all(outgoing.as_bytes()).await.map_err(|err| err.to_string())?,
+        None => Err("Missing writehalf")?
+    };
+    Ok(())
+}
+
+#[tauri::command]
+async fn request_history(mut target: String, amount: String, visibility: String, state: tauri::State<'_, TauriState>) -> Result<(), String> {
     let lock_u = state.username.lock();
     let username = match &mut *lock_u.await {
         Some(usr) => usr.clone(),
@@ -184,12 +231,16 @@ async fn request_history(channel: String, amount: String, state: tauri::State<'_
         Some(token) => token.clone(),
         _ => {return Err("unable to fetch auth-token: mutex poisoned".to_string());}
     };
-
+    if visibility == "dm" {
+        let mut users = vec![username.clone(), target.clone()];
+        users.sort();
+        target = format!("DM_{user1}_{user2}", user1 = users[0], user2 = users[1]);
+    }
     let cmd_struct = Message::Command(CommandMessage { 
         username, 
         auth_token, 
         command_type: String::from("history"), 
-        args: vec![channel.clone(), amount]
+        args: vec![target.clone(), amount]
     });
     let formated_cmd_struct = serde_json::to_string(&cmd_struct).unwrap();
     let finalized_cmd: String = format!("{}\n", formated_cmd_struct);
@@ -199,7 +250,7 @@ async fn request_history(channel: String, amount: String, state: tauri::State<'_
     match &mut *lock.await {
         Some(write_half) => {
             let _resulting = write_half.try_write(byte_slice).unwrap();
-            println!("sent cmd requesting history for channel {}", channel);
+            println!("sent cmd requesting history for channel {}", target);
         }
         _ => {
             return Err(String::from("cmd unable to send: ownedwritehalf not initialised"));
