@@ -2,9 +2,10 @@ import { ChangeEvent, FormEvent, useState } from 'react';
 
 interface ChatboxProps {
     sendMessage: (message: string) => void;
+    userName: string;
 }
 
-function Chatbox({ sendMessage }: ChatboxProps) {
+function Chatbox({ sendMessage, userName }: ChatboxProps) {
   const [message, setMessage] = useState('');
 
   const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -14,7 +15,7 @@ function Chatbox({ sendMessage }: ChatboxProps) {
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (message.trim() !== '') {
-      sendMessage("Me: " + message);
+      sendMessage(userName + ": " + message);
       setMessage('');
     }
   };

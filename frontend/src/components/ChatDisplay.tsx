@@ -1,5 +1,3 @@
-
-
 interface MessageDisplayProps {
     messages: string[];
 }

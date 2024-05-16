@@ -11,9 +11,10 @@ interface DM {
 
 interface DMPageProps{
     messageDisplayRef: React.RefObject<HTMLDivElement>;
+    userName: string;
 }
 
-function DMPage({ messageDisplayRef }: DMPageProps) {
+function DMPage({ messageDisplayRef, userName }: DMPageProps) {
 
     const [activeDM, setActiveDM] = useState<DM | null>(null);
     const [DMs, setDMs] = useState<DM[]>([]);
@@ -60,7 +61,7 @@ function DMPage({ messageDisplayRef }: DMPageProps) {
                 <MessageDisplay messages={activeDM ? activeDM.messages : []} />
             </div>
             <div className='Chatbox'>
-                <Chatbox sendMessage={sendMessage} />
+                <Chatbox sendMessage={sendMessage} userName={userName}/>
             </div>
         </div>
     );

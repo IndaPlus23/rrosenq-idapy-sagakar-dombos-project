@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import './App.css';
 import Navbar from './components/Navbar';
 import Sidebar from "./components/Sidebar";
@@ -12,6 +12,20 @@ import ServerPage from './pages/ServerPage';
 function App() {
 
   const messageDisplayRef = useRef<HTMLDivElement>(null);
+  const [userName, setUserName] = useState<string | null>(null);
+
+  useEffect(() => {
+    const storedUserName = localStorage.getItem('userName');
+    if (!storedUserName) {
+      const userName = prompt("Enter your name");
+      if (userName) {
+        setUserName(userName);
+        localStorage.setItem('userName', userName);
+      }
+    } else {
+      setUserName(storedUserName);
+    }
+  }, []);
 
   return (
     <div className='App'>
@@ -24,24 +38,23 @@ function App() {
         </div>
         <div className='PageContent'>
           <Routes>
-            <Route path="" element={
-              <div className='ChatPage'>
-                <Navigate replace to="/chat" />
-              </div> } />
+            <Route path="" element={<Navigate to="/chat" />} />
             <Route path="/chat" element= {
               <div className='ChatPage'>
                 <ChatPage
-                  messageDisplayRef={messageDisplayRef}/>
+                  messageDisplayRef={messageDisplayRef}
+                  userName={userName ? userName: ''}/>
               </div> } />
               <Route path="/dm" element= {
               <div className='DMPage'>
                 <DMPage
                   messageDisplayRef={messageDisplayRef}
+                  userName={userName ? userName: ''}
                 />
               </div> } />
             <Route path="/profile" element= {
               <div className='ProfilePage'>
-                <ProfilePage />
+                <ProfilePage setUserName={setUserName} userName={userName ? userName: ''}/>
               </div> } />
             <Route path='/settings' element= {
               <div className='SettingsPage'>
