@@ -50,8 +50,8 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 while let Some(output) = async_proc_output_rx.recv().await {
                     match output {
-                        Message::Text(_) => {
-                            recieve_message(output, &app_handle);
+                        Message::Text(inner) => {
+                            recieve_message(inner, &app_handle);
                         },
                         Message::File(_) => todo!(),
                         Message::Command(_) => todo!(),
@@ -91,7 +91,7 @@ async fn async_process_model(
     return Err(String::from("error in async-handler"));
 }
 
-fn recieve_message<R: tauri::Runtime>(message: Message, manager: &impl Manager<R>) {
+fn recieve_message<R: tauri::Runtime>(message: TextMessage, manager: &impl Manager<R>) {
     info!(?message, "recieve_message");
     manager.emit_all("recieve_message", message).unwrap();
 }
@@ -110,7 +110,6 @@ fn init_users<R: tauri::Runtime>(users: Vec<String>, manager: &impl Manager<R>) 
 async fn send_message(
     message: String,
     mut target: String,
-    visibility: String,
     state: tauri::State<'_, TauriState>,
 ) -> Result<(), String> {
     info!(?message, "send_message");
@@ -120,11 +119,6 @@ async fn send_message(
         Some(usr) => usr.clone(),
         _ => {return Err("unable to fetch username: mutex poisoned".to_string());}
     };
-    if visibility == "dm" {
-        let mut users = vec![username.clone(), target.clone()];
-        users.sort();
-        target = format!("DM_{user1}_{user2}", user1 = users[0], user2 = users[1]);
-    }
     let lock_a = state.auth_token.lock();
     let auth_token = match &mut *lock_a.await {
         Some(token) => token.clone(),

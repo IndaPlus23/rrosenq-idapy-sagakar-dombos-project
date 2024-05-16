@@ -27,9 +27,7 @@ function Root() {
 
 const root = createRoot(document.getElementById('root')!); // Create root
 root.render( // Render your component inside root(
-  <React.StrictMode>
     <BrowserRouter>
       <Root />
     </BrowserRouter>
-  </React.StrictMode>,
 );
