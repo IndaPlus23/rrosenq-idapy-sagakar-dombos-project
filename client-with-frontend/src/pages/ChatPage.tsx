@@ -12,9 +12,10 @@ interface Channel {
 
 interface ChatPageProps{
     messageDisplayRef: React.RefObject<HTMLDivElement>;
+    userName: string;
 }
 
-function ChatPage({messageDisplayRef}: ChatPageProps) {
+function ChatPage({messageDisplayRef, userName}: ChatPageProps) {
 
     const [activeChannel, setActiveChannel] = useState<Channel | null>(null);
     const [channels, setChannels] = useState<Channel[]>([]);
@@ -61,7 +62,7 @@ function ChatPage({messageDisplayRef}: ChatPageProps) {
                 <MessageDisplay messages={activeChannel ? activeChannel.messages : []} />
             </div>
             <div className='Chatbox'>
-                <Chatbox sendMessage={sendMessage} />
+                <Chatbox sendMessage={sendMessage} userName={userName} />
             </div>
         </div>
     );
