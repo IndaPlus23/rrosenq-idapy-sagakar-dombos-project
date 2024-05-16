@@ -1,0 +1,349 @@
+body {
+  margin: 0;
+  padding: 0;
+}
+
+.App {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: aqua;
+}
+
+.navbar {
+  position: fixed;
+  top: 0;
+  width: 100%;
+  height: 20px;
+  background-color: rgb(245, 29, 94);
+  display: flex;
+  align-items: center;
+  padding: 20px;
+  margin-bottom: 8px;
+  z-index: 1;
+}
+
+.navbar-h1 {
+  color: rgb(248, 233, 236)
+}
+
+.navbar-link {
+  background-color: rgb(255, 199, 208);
+  color: black;
+  padding: 7px;
+  font-weight: bold;
+  border-radius: 10px;
+  margin-left: 16px;
+  text-decoration: none;
+}
+
+.navbar-link:hover {
+  color: pink;
+}
+
+.Components {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+}
+
+.Sidebar {
+  position: fixed;
+  top: 45px;
+  left: 0;
+  width: 130px;
+  background-color: rgb(255, 31, 98);
+  height: 100%;
+}
+
+.SidebarList {
+
+  width: 100%;
+  padding: 0;
+
+}
+
+.SidebarList .Row {
+  width: 100%;
+  height: 100px;
+  list-style-type: none;
+  margin: 0%;
+  display: flex;
+  color: white;
+  justify-content: center;
+  align-items: center;
+  font-family: 'Trebuchet MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Lucida Sans', Arial, sans-serif;
+  border-radius: 20px;
+  
+}
+
+.SidebarList .Row:hover {
+  cursor: pointer;
+  background-color: rgb(247, 113, 153);
+}
+
+.SidebarList #active  {
+  cursor: pointer;
+  background-color: rgb(247, 113, 153);
+}
+
+.Row #icon {
+  flex: 30%;
+  display: grid;
+  place-items: center;
+}
+.Row #title {
+  flex: 70%;
+}
+
+.ChannelMenu {
+  background-color: rgb(251, 74, 127);
+  padding: 0;
+  margin: 0;
+  position: fixed;
+  left: 130px;
+  top: 74px;
+  width: 200px;
+  height: 100%;
+}
+
+.ChannelMenu .row {
+  width: 200px;
+  height: 50px;
+  list-style-type: none;
+  margin-left: -40px;
+  display: flex;
+  color: white;
+  justify-content: center;
+  align-items: center;
+  font-family: 'Trebuchet MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Lucida Sans', Arial, sans-serif;
+  border-radius: 20px; 
+}
+
+.ChannelMenu .header {
+  position: fixed;
+  top: 60px;
+  left: 130px;
+  color: white;
+  padding-bottom: 4px;
+  padding-top: 4px;
+  margin-top: 1px;
+  font-size: large;
+  text-align: center;
+  background-color: rgb(209, 35, 87);
+  width: 200px;
+}
+
+.ChannelMenu .row:hover {
+  cursor: pointer;
+  background-color: rgb(247, 113, 153);
+}
+
+.ChannelMenu #active  {
+  cursor: pointer;
+  background-color: rgb(247, 113, 153);
+}
+
+.row #icon {
+  flex: 30%;
+  display: grid;
+  place-items: center;
+}
+.row #title {
+  flex: 70%;
+}
+
+.ChannelMenu .NewChannel {
+  color: white;
+  display: flex;
+  width: 200px;
+  height: 50px;
+  list-style-type: none;
+  justify-content: center;
+  align-items: center;
+  font-family: 'Trebuchet MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Lucida Sans', Arial, sans-serif;
+  border-radius: 20px; 
+}
+
+.ChannelMenu .NewChannel:hover {
+  cursor: pointer;
+  background-color: rgb(247, 113, 153);
+}
+
+.NewChannel #ICON {
+  flex: 30%;
+  display: grid;
+  place-items: center;
+}
+
+.NewChannel #Text {
+  flex: 70%;
+}
+
+.Chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.ChatDisplay {
+  position: fixed;
+  top: 60px;
+  left: 330px;
+  right: 0;
+  bottom: 50px;
+  overflow-y: scroll;
+  flex: 1;
+  background-color: rgb(253, 132, 172);
+  font-size: large;
+  font-family: Arial, Helvetica, sans-serif;
+  display: flex;
+}
+
+.ChatDisplay .Message {
+  background-color: pink;
+  padding: 8px;
+  width: 1173px;
+  border-top: 1px solid rgb(209, 35, 87);
+}
+
+.Chatbox {
+  width: 100%; /* Adjust width as needed */
+  height: 50px; /* Adjust height as needed */
+  position: fixed;
+  bottom: 0;
+  left: 330px;
+  background-color: rgb(255, 116, 178);
+  font-size: large;
+}
+
+.Chatbox .Box {
+  margin-left: 150px;
+  margin-top: 5px;
+  border-radius: 5px;
+  width: 500px;
+  background-color: rgb(251, 230, 233);
+  color: rgb(245, 29, 94)
+
+}
+
+.Chatbox .Button {
+  border-radius: 8px;
+  background-color: white;
+  color: rgb(245, 29, 94);
+
+}
+
+.PageContent {
+  flex-grow: 1;
+  margin-top: 20px; 
+  margin-left: 130px; 
+  overflow-y: auto;
+  position: relative;
+  background-color: white; 
+}
+
+.ProfilePage {
+  width: 100%;
+  height: 100%;
+  margin-top: 40px;
+  background-color: rgb(253, 132, 172);
+}
+
+.ProfilePage .ProfilePic {
+  background-color: rgb(247, 113, 153);
+  text-align: center;
+  width: 150px;
+  height: 200px;
+  position: fixed;
+  margin-left: 30px;
+  top: 80px;
+}
+
+.ProfilePage .UserData {
+  position: fixed;
+  margin-left: 200px;
+  top: 75px;
+}
+
+.ProfilePage .Changes {
+  position: fixed;
+  top: 300px;
+  left: 150px;
+  width: 700px;
+  border-top: 1px solid black;
+}
+
+.ProfilePage .Changes #CU {
+  padding: 20px;
+  margin: 20px;
+}
+
+.Changes #CT {
+  padding: 20px;
+  margin: 20px;
+}
+
+.SettingsPage {
+  width: 100%;
+  height: 100%;
+  margin-top: 40px;
+  background-color: rgb(253, 132, 172);
+  padding-left: 5px;
+}
+
+.SettingsPage .Notifications {
+  border-top: 1px solid grey;
+  width: 400px;
+  color: white;
+}
+
+.SettingsPage .Notifications #one {
+  color: palevioletred;
+  border-radius: 5px;
+  padding: 5px;
+  margin-right: 5px;
+}
+
+.SettingsPage .Notifications #two {
+  color: palevioletred;
+  border-radius: 5px;
+  padding: 5px;
+  margin-left: 5px;
+}
+
+.SettingsPage .Notifications #one:hover {
+  background-color: pink;
+}
+
+.SettingsPage .Notifications #two:hover {
+  background-color: pink;
+}
+
+.ServerPage {
+  width: 100%;
+  height: 100%;
+  margin-top: 40px;
+  background-color: peru;
+}
+
+.Buttons #one {
+  margin: 20px;
+  background-color: orange;
+}
+
+.Buttons #two {
+  margin: 20px;
+  background-color: tomato;
+}
+
+.Buttons #three {
+  margin: 20px;
+  background-color: darkcyan;
+}
+
+.Buttons #four {
+  margin: 20px;
+  background-color: mediumseagreen;
+}
+
