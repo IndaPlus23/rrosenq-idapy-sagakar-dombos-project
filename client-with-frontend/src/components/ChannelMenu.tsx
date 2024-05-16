@@ -3,6 +3,10 @@ import '../App.css';
 import AddIcon from '@mui/icons-material/Add';
 import TagIcon from '@mui/icons-material/Tag';
 import ArticleIcon from '@mui/icons-material/Article';
+import { useEffect } from 'react';
+import { listen } from '@tauri-apps/api/event';
+import { Event } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api';
 
 interface ChannelItem {
     title: string | null;
@@ -17,31 +21,33 @@ interface ChannelMenuProps {
 }
 
 const ChannelMenu: React.FC<ChannelMenuProps> = ({ header, onChannelSelect, activeChannelId }) => {
-    const [channels, setChannels] = useState<ChannelItem[]>([
-        {
-            title: "Main",
-            icon: <TagIcon />,
-            link: "/main",
-        },
+    const [channels, setChannels] = useState<ChannelItem[]>([{
+        title: "test",
+        icon: <ArticleIcon />,
+        link: "/test"
+    }]);
+    const addChannel = (name: string) => {
 
-    ]);
-
-    const handleNewChannelClick = () => {
-
-        var input = prompt("Enter name")
-        if (input) {
-            const newChannel: ChannelItem = {
-                title: input, // You can replace this with user input
-                icon: <ArticleIcon />,
-                link: "/new-channel" // You can create a link based on the new channel's title
-            };
-            setChannels([...channels, newChannel]);     
-        }
+        const newChannel: ChannelItem = {
+            title: name, // You can replace this with user input
+            icon: <ArticleIcon />,
+            link: "/" + name // You can create a link based on the new channel's title
+        };
+        setChannels([...channels, newChannel]);     
 
     };
 
+    async function listen_channels() {
+        await listen('init_channels', (event: Event<Array<string>>) => {
+            for (const element of event.payload) {
+                addChannel(element);
+                invoke('request_history', { target: element, amount: '50', visibility: 'public' });
+            }
+        });
+    }
+
     return (
-        <div className='ChannelMenu'>
+        <div className='ChannelMenu' onLoad={listen_channels}>
             <h1 className='header'>{header}</h1>
             <ul className="ChannelList">
                 {channels.map((val, key) => (
@@ -59,12 +65,6 @@ const ChannelMenu: React.FC<ChannelMenuProps> = ({ header, onChannelSelect, acti
                     </li>
                 ))}
             </ul>
-            <div className='NewChannel'>
-                <li onClick={handleNewChannelClick} style={{ cursor: 'pointer' }}>
-                    <div id="ICON"><AddIcon/></div>
-                    <div id='Text'>New Channel</div>
-                </li>
-            </div>
         </div>
     );
 }
