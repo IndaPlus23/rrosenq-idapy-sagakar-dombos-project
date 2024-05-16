@@ -347,3 +347,16 @@ body {
   background-color: mediumseagreen;
 }
 
+.LoginPage {
+  background-color: rgb(247, 113, 153);
+  height: 730px;
+}
+
+.LoginPage button {
+  margin: 50px;
+  color: black;
+  padding: 30px 60px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
