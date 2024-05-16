@@ -15,7 +15,7 @@ function Chatbox({ sendMessage, userName }: ChatboxProps) {
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (message.trim() !== '') {
-      sendMessage(userName + ": " + message);
+      sendMessage(message);
       setMessage('');
     }
   };

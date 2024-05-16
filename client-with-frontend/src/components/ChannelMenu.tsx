@@ -17,42 +17,57 @@ interface ChannelItem {
 interface ChannelMenuProps {
     header: string;
     onChannelSelect: (channelId: string) => void;
+    onChannelCreate: (channelId: string) => void;
     activeChannelId: string;
+    isDM: boolean
 }
 
-const ChannelMenu: React.FC<ChannelMenuProps> = ({ header, onChannelSelect, activeChannelId }) => {
+const ChannelMenu: React.FC<ChannelMenuProps> = ({ header, onChannelSelect, activeChannelId, isDM, onChannelCreate}) => {
     const [channels, setChannels] = useState<ChannelItem[]>([]);
     const addChannels = (names: string[]) => {
-
         let newChannels: ChannelItem[] = []
         names.forEach((elem) => {
+            const channelName = isDM ? dmChannelName(elem) : elem
             const newChannel: ChannelItem = {
                 title: elem, // You can replace this with user input
                 icon: <ArticleIcon />,
-                link: "/" + elem, // You can create a link based on the new channel's title
+                link: "/" + channelName, // You can create a link based on the new channel's title
             };
             newChannels.push(newChannel);
+            onChannelCreate(channelName)
         } )
         
         setChannels([...channels, ...newChannels]);     
 
     }; 
-
+    
     var fetchedChannels = false;
 
     useEffect(() => {
         async function fetch_channels() {
             invoke('request_channels');
-            fetchedChannels = true;
             await listen('init_channels', (event: Event<Array<string>>) => {
                 addChannels(event.payload);
                 for (const element of event.payload) {
                     invoke('request_history', { target: element, amount: '50', visibility: 'public' });
                 }
         });}
-        if (!fetchedChannels) {
+
+        async function fetch_users() {
+            invoke('request_users')
+            await listen('init_users', (event: Event<Array<string>>) => {
+                addChannels(event.payload)
+                for (const username of event.payload) {
+                    invoke('request_history', { target: username, amount: '50', visibility: 'dm' });
+                }
+            });
+        }
+        if (isDM && !fetchedChannels) {
+            fetch_users()
+        } else if (!fetchedChannels) {
             fetch_channels()
         }
+        fetchedChannels = true
     }, []);
 
     return (
@@ -63,8 +78,8 @@ const ChannelMenu: React.FC<ChannelMenuProps> = ({ header, onChannelSelect, acti
                     <li 
                         key={key} 
                         className="row" 
-                        id={val.link === activeChannelId ? "active" : ""}
-                        onClick={() => onChannelSelect(val.link)}>
+                        id={val.link.replace("/", "") === activeChannelId ? "active" : ""}
+                        onClick={() => onChannelSelect(val.link.replace("/", ""))}>
                         <div id="icon">
                             {val.icon}
                         </div>   
@@ -76,6 +91,16 @@ const ChannelMenu: React.FC<ChannelMenuProps> = ({ header, onChannelSelect, acti
             </ul>
         </div>
     );
+}
+
+function dmChannelName(target: string): string {
+    const username = sessionStorage.getItem('userName')
+    if (username) {
+        let users = [username, target]
+        users.sort();
+        return `DM_${users[0]}_${users[1]}`
+    }
+    return ""
 }
 
 export default ChannelMenu;

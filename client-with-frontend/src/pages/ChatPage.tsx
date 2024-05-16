@@ -11,7 +11,7 @@ import { Event } from '@tauri-apps/api/event';
 interface Channel {
     id: string;
     name: string;
-    messages: string[];
+    messages: Message[];
 }
 
 interface ChatPageProps{
@@ -23,48 +23,53 @@ function ChatPage({messageDisplayRef, userName}: ChatPageProps) {
 
     const [activeChannel, setActiveChannel] = useState<Channel | null>(null);
     const [channels, setChannels] = useState<Channel[]>([]);
+    const [updated, setupdated] = useState<boolean>(false);
+    const [firstChannel, setFirstChannel] = useState<boolean>(true)
 
     const switchChannel = (channelId: string) => {
         const channel = channels.find(c => c.id === channelId);
         if (channel) {
-            setActiveChannel(channel);
-        } else {
-            const newChannel: Channel = {
-                id: channelId,
-                name: channelId,
-                messages: [],
-            };
-            setActiveChannel(newChannel);
-            setChannels(prevChannels => [...prevChannels, newChannel]);
+            setActiveChannel(channel); 
         }
     };
 
+    const createChannel = (channelId: string) => {
+        const newChannel: Channel = {
+            id: channelId,
+            name: channelId,
+            messages: [],
+        };
+        channels.push(newChannel)
+        if (firstChannel) {
+            setActiveChannel(newChannel);
+            setFirstChannel(false);
+        }
+    }
+    
+    useEffect(() => {
+        async function listen_messages() {
+            await listen('recieve_message', (event: Event<Message>) => {
+                const channel = channels.find(c => c.id === event.payload.channel);
+                if (channel) {
+                    channel.messages.push(event.payload)
+                    setupdated(true)
+                }
+            });
+        }
+        listen_messages()
+    }, [])
+
     const sendMessage = (message: string) => {
-        invoke('send_message', { message: message, target: activeChannel, visibility: 'public' })
+        invoke('send_message', { message: message, target: activeChannel ? activeChannel.id : ""})
     };
 
     useEffect(() => {
         if (messageDisplayRef.current) {
           messageDisplayRef.current.scrollTop = messageDisplayRef.current.scrollHeight;
         }
-      }, [activeChannel ? activeChannel.messages : ''])
+        setupdated(false)
+      }, [updated])
     
-    // async function listen_messages() {
-    //     await listen('recieve_message', (event: Event<Message>) => {
-    //         let input = event.payload;
-    //         let id = is_dm ? "dm-" + dm_name : "channel-" + input.channel;
-    //         console.log(id);
-
-    //         const scrollElem = document.getElementById(id);
-    //         const chatElem = scrollElem.getElementsByClassName("inner-channel")[0];
-
-    //         var para = document.createElement("p");
-    //         para.innerHTML = '<strong class="who">' + input.username + ': </strong>' + input.body;
-    //         chatElem.appendChild(para);
-
-    //         scrollElem.scrollTop = scrollElem.scrollHeight;
-    //     });
-    // }
     
     return (
         <div className='Chat'>
@@ -73,6 +78,8 @@ function ChatPage({messageDisplayRef, userName}: ChatPageProps) {
                     header={"Channels"}
                     onChannelSelect={switchChannel}
                     activeChannelId={activeChannel ? activeChannel.id : ''}
+                    isDM={false}
+                    onChannelCreate={createChannel}
                     />
             </div>
             <div ref={messageDisplayRef} className='ChatDisplay'>
