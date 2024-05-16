@@ -21,33 +21,42 @@ interface ChannelMenuProps {
 }
 
 const ChannelMenu: React.FC<ChannelMenuProps> = ({ header, onChannelSelect, activeChannelId }) => {
-    const [channels, setChannels] = useState<ChannelItem[]>([{
-        title: "test",
-        icon: <ArticleIcon />,
-        link: "/test"
-    }]);
-    const addChannel = (name: string) => {
+    const [channels, setChannels] = useState<ChannelItem[]>([]);
+    const addChannels = (names: string[]) => {
 
-        const newChannel: ChannelItem = {
-            title: name, // You can replace this with user input
-            icon: <ArticleIcon />,
-            link: "/" + name // You can create a link based on the new channel's title
-        };
-        setChannels([...channels, newChannel]);     
+        let newChannels: ChannelItem[] = []
+        names.forEach((elem) => {
+            const newChannel: ChannelItem = {
+                title: elem, // You can replace this with user input
+                icon: <ArticleIcon />,
+                link: "/" + elem, // You can create a link based on the new channel's title
+            };
+            newChannels.push(newChannel);
+        } )
+        
+        setChannels([...channels, ...newChannels]);     
 
-    };
+    }; 
 
-    async function listen_channels() {
-        await listen('init_channels', (event: Event<Array<string>>) => {
-            for (const element of event.payload) {
-                addChannel(element);
-                invoke('request_history', { target: element, amount: '50', visibility: 'public' });
-            }
-        });
-    }
+    var fetchedChannels = false;
+
+    useEffect(() => {
+        async function fetch_channels() {
+            invoke('request_channels');
+            fetchedChannels = true;
+            await listen('init_channels', (event: Event<Array<string>>) => {
+                addChannels(event.payload);
+                for (const element of event.payload) {
+                    invoke('request_history', { target: element, amount: '50', visibility: 'public' });
+                }
+        });}
+        if (!fetchedChannels) {
+            fetch_channels()
+        }
+    }, []);
 
     return (
-        <div className='ChannelMenu' onLoad={listen_channels}>
+        <div className='ChannelMenu' >
             <h1 className='header'>{header}</h1>
             <ul className="ChannelList">
                 {channels.map((val, key) => (
