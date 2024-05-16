@@ -8,7 +8,7 @@ function sendMessage(body) {
     const channelList = document.getElementById("channels");
     const dmList = document.getElementById("dms")
     if (window.messageMode == "public") {
-        invoke('send_message', { message: body, channel: channelList.options[channelList.selectedIndex].value, visibility: 'public' })
+        invoke('send_message', { message: body, target: channelList.options[channelList.selectedIndex].value, visibility: 'public' })
     }
     else {
         invoke('send_message', {message: body, target: dmList.options[dmList.selectedIndex].value, visibility: 'dm'})
@@ -102,7 +102,7 @@ async function init() {
             channelBoxInside.appendChild(innerChannel);
             channelBox.appendChild(channelBoxInside);
 
-            invoke('request_history', { channel: element, amount: '50', visibility: 'public' });
+            invoke('request_history', { target: element, amount: '50', visibility: 'public' });
         }
     });
 
