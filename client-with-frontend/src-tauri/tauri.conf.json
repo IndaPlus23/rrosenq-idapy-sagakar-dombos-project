@@ -6,7 +6,7 @@
     "distDir": "../dist"
   },
   "package": {
-    "productName": "test2",
+    "productName": "chat-client",
     "version": "0.1.0"
   },
   "tauri": {
@@ -22,7 +22,7 @@
     },
     "bundle": {
       "active": true,
-      "category": "DeveloperTool",
+      "category": "SocialNetworking",
       "copyright": "",
       "deb": {
         "depends": []
@@ -64,7 +64,7 @@
         "fullscreen": false,
         "height": 600,
         "resizable": true,
-        "title": "test",
+        "title": "Chat Client",
         "width": 1100
       }
     ]
